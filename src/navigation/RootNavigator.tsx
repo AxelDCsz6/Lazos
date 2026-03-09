@@ -1,4 +1,5 @@
 import React from 'react';
+import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../hooks/useAuth';
@@ -9,7 +10,15 @@ import { RootStackParamList } from '../types';
 const Root = createNativeStackNavigator<RootStackParamList>();
 
 export function RootNavigator() {
-/*  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <View style={styles.splash}>
+        <ActivityIndicator size="large" color="#6B9E78" />
+      </View>
+    );
+  }
 
   return (
     <NavigationContainer>
@@ -22,13 +31,8 @@ export function RootNavigator() {
       </Root.Navigator>
     </NavigationContainer>
   );
-*/
-// descomentar cuando sea necesario usar ahora si la autenticacion, por el momento durante el desarrollo por comodidad se hara simplemente asi
-return (
-    <NavigationContainer>
-      <Root.Navigator screenOptions={{ headerShown: false }}>
-        <Root.Screen name="App" component={AppTabs} />
-      </Root.Navigator>
-    </NavigationContainer>
-  );
 }
+
+const styles = StyleSheet.create({
+  splash: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FDF6EE' },
+});

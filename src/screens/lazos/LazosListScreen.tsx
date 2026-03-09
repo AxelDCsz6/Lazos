@@ -10,10 +10,10 @@ import {
   StatusBar,
   Modal,
   FlatList,
-  PanResponderGestureState,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useAuth } from '../../hooks/useAuth';
 
 const { width: SW, height: SH } = Dimensions.get('window');
 
@@ -21,6 +21,7 @@ const { width: SW, height: SH } = Dimensions.get('window');
 const C = {
   bg: '#FDF6EE',
   beige: '#F5ECD7',
+  beigeCard: '#EDE0C8',
   green: '#6B9E78',
   greenDark: '#4A7A58',
   greenLight: '#D4EAD8',
@@ -30,7 +31,6 @@ const C = {
   textLight: '#B0A090',
   white: '#FFFDF8',
   shadow: '#C4A97D',
-  overlay: 'rgba(40,28,16,0.38)',
 };
 
 // ─── Datos mock ───────────────────────────────────────────────
@@ -79,117 +79,31 @@ function WaterButton({ onWater }: { onWater: () => void }) {
   return (
     <Animated.View style={{ transform: pan.getTranslateTransform() }} {...panResponder.panHandlers}>
       <View style={[styles.waterBtnInner, watered && styles.waterBtnWatered]}>
-        <Icon name="water" size={24} color="#FFF" />
+        <Text style={{ fontSize: 22 }}>💧</Text>
       </View>
     </Animated.View>
   );
 }
 
-// ─── Chat con slide a pantalla completa ───────────────────────
-const CHAT_HALF = SH * 0.28;  // posición inicial: ocupa 72% de pantalla desde abajo
-const CHAT_FULL = 0;           // pantalla completa
-
+// ─── Modal Chat ───────────────────────────────────────────────
 function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const translateY = useRef(new Animated.Value(CHAT_HALF)).current;
-  const currentSnap = useRef(CHAT_HALF);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-
-  const snapTo = (toValue: number) => {
-    currentSnap.current = toValue;
-    setIsFullscreen(toValue === CHAT_FULL);
-    Animated.spring(translateY, {
-      toValue,
-      useNativeDriver: true,
-      tension: 65,
-      friction: 13,
-    }).start();
-  };
-
-  const handleOpen = () => {
-    currentSnap.current = CHAT_HALF;
-    setIsFullscreen(false);
-    translateY.setValue(CHAT_HALF);
-  };
-
-  const handleClose = () => {
-    Animated.timing(translateY, {
-      toValue: SH,
-      duration: 220,
-      useNativeDriver: true,
-    }).start(() => {
-      snapTo(CHAT_HALF);
-      onClose();
-    });
-  };
-
-  const headerPan = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dy) > 5,
-      onPanResponderGrant: () => {
-        translateY.setOffset(currentSnap.current);
-        translateY.setValue(0);
-      },
-      onPanResponderMove: Animated.event([null, { dy: translateY }], {
-        useNativeDriver: false,
-      }),
-      onPanResponderRelease: (_: any, gs: PanResponderGestureState) => {
-        translateY.flattenOffset();
-        if (gs.vy < -0.5 || gs.dy < -50) {
-          snapTo(CHAT_FULL);
-        } else if (gs.vy > 0.5 || gs.dy > 80) {
-          handleClose();
-        } else {
-          snapTo(currentSnap.current);
-        }
-      },
-    }),
-  ).current;
-
   return (
-    <Modal
-      visible={visible}
-      animationType="none"
-      transparent
-      onRequestClose={handleClose}
-      onShow={handleOpen}>
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-        {/* Overlay solo toca para cerrar si no está fullscreen */}
-        <TouchableOpacity
-          style={[StyleSheet.absoluteFill, { backgroundColor: C.overlay }]}
-          onPress={handleClose}
-          activeOpacity={1}
-        />
-        <Animated.View style={[styles.chatContainer, { transform: [{ translateY }] }]}>
-
-          {/* Header — zona de drag */}
-          <View style={styles.chatHeader} {...headerPan.panHandlers}>
-            <View style={styles.chatDragHandle} />
-            <View style={styles.chatHeaderRow}>
-              <TouchableOpacity onPress={handleClose} style={styles.chatClose}>
-                <Icon name="close" size={20} color="#FFF" />
-              </TouchableOpacity>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.chatTitle}>Mi primer lazo</Text>
-                <Text style={styles.chatSubtitle}>En línea</Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => snapTo(isFullscreen ? CHAT_HALF : CHAT_FULL)}
-                style={styles.chatExpandBtn}>
-                <Icon
-                  name={isFullscreen ? 'chevron-down' : 'chevron-up'}
-                  size={22}
-                  color="#FFF"
-                />
-              </TouchableOpacity>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.chatContainer}>
+          <View style={styles.chatHeader}>
+            <TouchableOpacity onPress={onClose} style={styles.chatClose}>
+              <Text style={styles.chatCloseText}>✕</Text>
+            </TouchableOpacity>
+            <View>
+              <Text style={styles.chatTitle}>Mi primer lazo</Text>
+              <Text style={styles.chatSubtitle}>En línea</Text>
             </View>
           </View>
-
-          {/* Mensajes */}
           <FlatList
             data={MOCK_MESSAGES}
             keyExtractor={i => i.id}
-            style={{ flex: 1, backgroundColor: C.bg }}
+            style={{ backgroundColor: C.bg }}
             contentContainerStyle={{ padding: 16, gap: 12 }}
             renderItem={({ item }) => (
               <View style={[styles.bubble, item.mine ? styles.bubbleMine : styles.bubbleOther]}>
@@ -202,91 +116,55 @@ function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void
               </View>
             )}
           />
-
-          {/* Input */}
           <View style={styles.chatInputRow}>
             <TouchableOpacity style={styles.chatPlus}>
-              <Icon name="plus" size={22} color={C.textSoft} />
+              <Text style={{ fontSize: 20, color: C.textSoft }}>+</Text>
             </TouchableOpacity>
             <View style={styles.chatInputWrap}>
               <Text style={styles.chatInputPlaceholder}>Escribe un mensaje...</Text>
             </View>
             <TouchableOpacity style={styles.chatSend}>
-              <Icon name="send" size={18} color={C.green} />
+              <Text style={{ fontSize: 16, color: C.green }}>➤</Text>
             </TouchableOpacity>
           </View>
-        </Animated.View>
+        </View>
       </View>
     </Modal>
   );
 }
 
-// ─── Menú lateral izquierdo ───────────────────────────────────
-function SideMenu({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const translateX = useRef(new Animated.Value(-SW * 0.78)).current;
-
-  React.useEffect(() => {
-    Animated.spring(translateX, {
-      toValue: visible ? 0 : -SW * 0.78,
-      useNativeDriver: true,
-      tension: 65,
-      friction: 14,
-    }).start();
-  }, [visible]);
-
+// ─── Modal Menú hamburguesa ───────────────────────────────────
+function MenuModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-        <TouchableOpacity
-          style={[StyleSheet.absoluteFill, { backgroundColor: C.overlay }]}
-          onPress={onClose}
-          activeOpacity={1}
-        />
-        <Animated.View style={[styles.sideMenu, { transform: [{ translateX }] }]}>
-          <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
-
-            {/* Perfil */}
-            <View style={styles.sideMenuHeader}>
-              <View style={styles.sideMenuAvatar}>
-                <Icon name="sprout" size={26} color={C.green} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sideMenuUser}>María González</Text>
-                <Text style={styles.sideMenuSub}>3 lazos activos</Text>
-              </View>
-              <TouchableOpacity onPress={onClose}>
-                <Icon name="close" size={20} color={C.textSoft} />
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.sideMenuSection}>MIS LAZOS</Text>
-
-            <FlatList
-              data={MOCK_LAZOS}
-              keyExtractor={i => i.id}
-              contentContainerStyle={{ paddingHorizontal: 16 }}
-              renderItem={({ item }) => (
-                <TouchableOpacity style={styles.lazoItem} onPress={onClose}>
-                  <View style={styles.lazoIconWrap}>
-                    <Icon name="leaf" size={17} color={C.green} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.lazoName}>{item.name}</Text>
-                    <Text style={styles.lazoLevel}>Nivel {item.level}</Text>
-                  </View>
-                  <View style={styles.lazoStreak}>
-                    <Text style={styles.lazoStreakNum}>{item.streak}</Text>
-                  </View>
-                </TouchableOpacity>
-              )}
-            />
-
-            <TouchableOpacity style={styles.newLazoBtn} onPress={onClose}>
-              <Icon name="plus" size={18} color="#FFF" />
-              <Text style={styles.newLazoBtnText}>Crear nuevo lazo</Text>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.menuContainer}>
+          <View style={styles.menuHeader}>
+            <Text style={styles.menuTitle}>Mis Lazos</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Text style={styles.menuClose}>✕</Text>
             </TouchableOpacity>
-          </SafeAreaView>
-        </Animated.View>
+          </View>
+          <FlatList
+            data={MOCK_LAZOS}
+            keyExtractor={i => i.id}
+            contentContainerStyle={{ paddingHorizontal: 20, gap: 4 }}
+            renderItem={({ item }) => (
+              <TouchableOpacity style={styles.lazoItem} onPress={onClose}>
+                <View>
+                  <Text style={styles.lazoName}>{item.name}</Text>
+                  <Text style={styles.lazoLevel}>Nivel {item.level}</Text>
+                </View>
+                <View style={styles.lazoStreak}>
+                  <Text style={styles.lazoStreakNum}>{item.streak}</Text>
+                </View>
+              </TouchableOpacity>
+            )}
+          />
+          <TouchableOpacity style={styles.newLazoBtn} onPress={onClose}>
+            <Text style={styles.newLazoBtnText}>+ Crear nuevo lazo</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </Modal>
   );
@@ -294,38 +172,105 @@ function SideMenu({ visible, onClose }: { visible: boolean; onClose: () => void 
 
 // ─── Modal Ajustes ────────────────────────────────────────────
 function SettingsModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const items = [
-    { icon: 'account-outline', title: 'Perfil', sub: 'Edita tu información personal' },
-    { icon: 'bell-outline', title: 'Notificaciones', sub: 'Gestiona tus notificaciones' },
-    { icon: 'lock-outline', title: 'Privacidad', sub: 'Configuración de privacidad' },
-    { icon: 'information-outline', title: 'Acerca de', sub: 'Información de la aplicación' },
+  const { user, logout } = useAuth();
+  const [profileOpen, setProfileOpen] = useState(false);
+
+  const handleLogout = () => {
+    Alert.alert(
+      'Cerrar sesión',
+      '¿Seguro que quieres salir?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Cerrar sesión',
+          style: 'destructive',
+          onPress: async () => {
+            onClose();
+            await logout();
+          },
+        },
+      ],
+    );
+  };
+
+  const menuItems = [
+    { icon: '🔔', title: 'Notificaciones', sub: 'Gestiona tus notificaciones', onPress: () => {} },
+    { icon: '🔒', title: 'Privacidad', sub: 'Configuración de privacidad', onPress: () => {} },
+    { icon: 'ℹ️', title: 'Acerca de', sub: 'Información de la aplicación', onPress: () => {} },
   ];
+
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <View style={styles.menuContainer}>
-          <View style={styles.menuHeader}>
-            <Text style={styles.menuTitle}>Configuración</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Icon name="close" size={22} color={C.textSoft} />
-            </TouchableOpacity>
-          </View>
-          <View style={{ paddingHorizontal: 20 }}>
-            {items.map(item => (
-              <TouchableOpacity key={item.title} style={styles.settingsItem}>
-                <View style={styles.settingsIconWrap}>
-                  <Icon name={item.icon} size={22} color={C.greenDark} />
-                </View>
-                <View>
-                  <Text style={styles.settingsTitle}>{item.title}</Text>
-                  <Text style={styles.settingsSub}>{item.sub}</Text>
-                </View>
+    <>
+      <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.menuContainer}>
+            <View style={styles.menuHeader}>
+              <Text style={styles.menuTitle}>Configuración</Text>
+              <TouchableOpacity onPress={onClose}>
+                <Text style={styles.menuClose}>✕</Text>
               </TouchableOpacity>
-            ))}
+            </View>
+            <View style={{ paddingHorizontal: 20 }}>
+
+              {/* Perfil — abre subpanel */}
+              <TouchableOpacity style={styles.settingsItem} onPress={() => setProfileOpen(true)}>
+                <View style={styles.settingsIcon}>
+                  <Text style={{ fontSize: 18 }}>👤</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingsTitle}>Perfil</Text>
+                  <Text style={styles.settingsSub}>{user?.username ?? 'Mi perfil'}</Text>
+                </View>
+                <Text style={{ color: C.textLight, fontSize: 18 }}>›</Text>
+              </TouchableOpacity>
+
+              {menuItems.map(item => (
+                <TouchableOpacity key={item.title} style={styles.settingsItem} onPress={item.onPress}>
+                  <View style={styles.settingsIcon}>
+                    <Text style={{ fontSize: 18 }}>{item.icon}</Text>
+                  </View>
+                  <View>
+                    <Text style={styles.settingsTitle}>{item.title}</Text>
+                    <Text style={styles.settingsSub}>{item.sub}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         </View>
-      </View>
-    </Modal>
+      </Modal>
+
+      {/* Sub-modal Perfil */}
+      <Modal visible={profileOpen} animationType="slide" transparent onRequestClose={() => setProfileOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.menuContainer}>
+            <View style={styles.menuHeader}>
+              <TouchableOpacity onPress={() => setProfileOpen(false)}>
+                <Text style={{ fontSize: 18, color: C.textSoft }}>‹</Text>
+              </TouchableOpacity>
+              <Text style={[styles.menuTitle, { flex: 1, textAlign: 'center' }]}>Perfil</Text>
+              <TouchableOpacity onPress={() => { setProfileOpen(false); onClose(); }}>
+                <Text style={styles.menuClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Info del usuario */}
+            <View style={styles.profileInfo}>
+              <View style={styles.profileAvatar}>
+                <Text style={{ fontSize: 32 }}>🌱</Text>
+              </View>
+              <Text style={styles.profileName}>{user?.username ?? '—'}</Text>
+              <Text style={styles.profileSub}>Miembro de Lazos</Text>
+            </View>
+
+            {/* Botón cerrar sesión */}
+            <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+              <Text style={styles.logoutText}>Cerrar sesión</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -348,11 +293,11 @@ export function LazosListScreen() {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity style={styles.headerBtn} onPress={() => setMenuOpen(true)}>
-            <Icon name="menu" size={26} color={C.text} />
+            <Text style={styles.headerIcon}>☰</Text>
           </TouchableOpacity>
           <Text style={styles.headerName}>María González</Text>
           <TouchableOpacity style={styles.headerBtn} onPress={() => setSettingsOpen(true)}>
-            <Icon name="cog-outline" size={26} color={C.text} />
+            <Text style={styles.headerIcon}>⚙️</Text>
           </TouchableOpacity>
         </View>
 
@@ -371,7 +316,6 @@ export function LazosListScreen() {
         {/* FABs */}
         <View style={styles.fabArea}>
           <TouchableOpacity style={styles.fabChat} onPress={() => setChatOpen(true)}>
-            <Icon name="chat-outline" size={16} color="#FFF" style={{ marginRight: 6 }} />
             <Text style={styles.fabChatText}>Chat</Text>
           </TouchableOpacity>
           <WaterButton onWater={() => {}} />
@@ -379,7 +323,7 @@ export function LazosListScreen() {
       </SafeAreaView>
 
       <ChatModal visible={chatOpen} onClose={() => setChatOpen(false)} />
-      <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} />
+      <MenuModal visible={menuOpen} onClose={() => setMenuOpen(false)} />
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </View>
   );
@@ -406,6 +350,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20, paddingTop: 4, paddingBottom: 4,
   },
   headerBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  headerIcon: { fontSize: 20 },
   headerName: { fontSize: 17, fontWeight: '500', color: C.text },
   cardWrapper: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   card: {
@@ -430,9 +375,8 @@ const styles = StyleSheet.create({
     alignItems: 'center', gap: 12,
   },
   fabChat: {
-    flexDirection: 'row', alignItems: 'center',
     backgroundColor: C.green, borderRadius: 24,
-    paddingHorizontal: 18, paddingVertical: 10,
+    paddingHorizontal: 20, paddingVertical: 10,
     shadowColor: C.green, shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35, shadowRadius: 8, elevation: 6,
   },
@@ -444,31 +388,18 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4, shadowRadius: 8, elevation: 6,
   },
   waterBtnWatered: { backgroundColor: C.green },
-
-  // ── Chat ──
-  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: C.overlay },
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.3)' },
   chatContainer: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    height: SH,
-    backgroundColor: C.white,
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    overflow: 'hidden',
+    backgroundColor: C.white, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    height: SH * 0.75,
   },
   chatHeader: {
-    backgroundColor: C.green,
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingTop: 8, paddingBottom: 12, paddingHorizontal: 16,
-  },
-  chatDragHandle: {
-    alignSelf: 'center', width: 36, height: 4,
-    borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.5)',
-    marginBottom: 10,
-  },
-  chatHeaderRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: C.green, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 16, paddingVertical: 14, gap: 12,
   },
   chatClose: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
-  chatExpandBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  chatCloseText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
   chatTitle: { color: '#FFF', fontSize: 16, fontWeight: '700' },
   chatSubtitle: { color: 'rgba(255,255,255,0.8)', fontSize: 12 },
   bubble: {
@@ -499,55 +430,9 @@ const styles = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: C.beige, alignItems: 'center', justifyContent: 'center',
   },
-
-  // ── Menú lateral ──
-  sideMenu: {
-    position: 'absolute', top: 0, left: 0, bottom: 0,
-    width: SW * 0.78, backgroundColor: C.white,
-    shadowColor: '#000', shadowOffset: { width: 6, height: 0 },
-    shadowOpacity: 0.18, shadowRadius: 20, elevation: 20,
-  },
-  sideMenuHeader: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingHorizontal: 20, paddingTop: 8, paddingBottom: 16,
-    borderBottomWidth: 1, borderBottomColor: C.beige,
-  },
-  sideMenuAvatar: {
-    width: 46, height: 46, borderRadius: 23,
-    backgroundColor: C.greenLight, alignItems: 'center', justifyContent: 'center',
-  },
-  sideMenuUser: { fontSize: 16, fontWeight: '700', color: C.text },
-  sideMenuSub: { fontSize: 13, color: C.textSoft, marginTop: 2 },
-  sideMenuSection: {
-    fontSize: 11, fontWeight: '700', color: C.textLight,
-    letterSpacing: 1.2, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8,
-  },
-  lazoItem: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingVertical: 12, paddingHorizontal: 4,
-    borderBottomWidth: 1, borderBottomColor: C.beige,
-  },
-  lazoIconWrap: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: C.greenLight, alignItems: 'center', justifyContent: 'center',
-  },
-  lazoName: { fontSize: 15, fontWeight: '600', color: C.text },
-  lazoLevel: { fontSize: 13, color: C.textSoft, marginTop: 1 },
-  lazoStreak: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: C.greenLight, alignItems: 'center', justifyContent: 'center',
-  },
-  lazoStreakNum: { fontSize: 14, fontWeight: '700', color: C.greenDark },
-  newLazoBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    margin: 20, backgroundColor: C.green, borderRadius: 16, paddingVertical: 14,
-  },
-  newLazoBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
-
-  // ── Ajustes ──
   menuContainer: {
     backgroundColor: C.white, borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingBottom: 32,
+    paddingBottom: 32, minHeight: SH * 0.5,
   },
   menuHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -555,14 +440,50 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: C.beige,
   },
   menuTitle: { fontSize: 18, fontWeight: '700', color: C.text },
+  menuClose: { fontSize: 18, color: C.textSoft },
+  lazoItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.beige,
+  },
+  lazoName: { fontSize: 15, fontWeight: '600', color: C.text },
+  lazoLevel: { fontSize: 13, color: C.textSoft, marginTop: 2 },
+  lazoStreak: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: C.greenLight, alignItems: 'center', justifyContent: 'center',
+  },
+  lazoStreakNum: { fontSize: 15, fontWeight: '700', color: C.greenDark },
+  newLazoBtn: {
+    margin: 20, backgroundColor: C.green, borderRadius: 16,
+    paddingVertical: 16, alignItems: 'center',
+  },
+  newLazoBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
   settingsItem: {
     flexDirection: 'row', alignItems: 'center', gap: 16,
     paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: C.beige,
   },
-  settingsIconWrap: {
+  settingsIcon: {
     width: 44, height: 44, borderRadius: 22,
     backgroundColor: C.beige, alignItems: 'center', justifyContent: 'center',
   },
   settingsTitle: { fontSize: 15, fontWeight: '600', color: C.text },
   settingsSub: { fontSize: 13, color: C.textSoft, marginTop: 2 },
+
+  // ── Perfil ──
+  profileInfo: {
+    alignItems: 'center', paddingVertical: 28,
+    borderBottomWidth: 1, borderBottomColor: C.beige,
+    marginHorizontal: 20,
+  },
+  profileAvatar: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: C.greenLight, alignItems: 'center', justifyContent: 'center',
+    marginBottom: 12,
+  },
+  profileName: { fontSize: 20, fontWeight: '700', color: C.text },
+  profileSub: { fontSize: 14, color: C.textSoft, marginTop: 4 },
+  logoutBtn: {
+    margin: 20, borderWidth: 1.5, borderColor: '#D9534F',
+    borderRadius: 16, paddingVertical: 14, alignItems: 'center',
+  },
+  logoutText: { color: '#D9534F', fontSize: 15, fontWeight: '700' },
 });
