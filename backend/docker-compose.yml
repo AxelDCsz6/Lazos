@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: lazos_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lazos
+      POSTGRES_PASSWORD: lazos_secret
+      POSTGRES_DB: lazos
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    ports:
+      - "5432:5432"
+
+  backend:
+    build: .
+    container_name: lazos_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://lazos:lazos_secret@db:5432/lazos
+      JWT_SECRET: cambia_esto_por_algo_seguro
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
