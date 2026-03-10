@@ -1,6 +1,6 @@
 // ─── API ──────────────────────────────────────────────────────────────────────
 export const API_BASE_URL = __DEV__
-  ? 'http://10.0.2.2:3000/api' // Android emulator → localhost del host
+  ? 'http://192.168.1.109:3000/api' // Android emulator → localhost del host
   : 'https://tu-backend.railway.app/api';
 
 export const API_TIMEOUT = 10000; // 10s

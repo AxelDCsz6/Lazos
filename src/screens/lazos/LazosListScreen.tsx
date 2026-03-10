@@ -11,6 +11,7 @@ import {
   Modal,
   FlatList,
   PanResponderGestureState,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -293,50 +294,95 @@ function SideMenu({ visible, onClose }: { visible: boolean; onClose: () => void 
   );
 }
 
-// ─── Modal Ajustes ────────────────────────────────────────────
 function SettingsModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-	const { user, logout } = useAuth();
+  const { user, logout } = useAuth();
   const [profileOpen, setProfileOpen] = useState(false);
 
   const handleLogout = () => {
-    Alert.alert('Cerrar sesión', '¿Seguro que quieres salir?', [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Cerrar sesión', style: 'destructive',
-        onPress: async () => { onClose(); await logout(); } },
-    ]);
+    Alert.alert(
+      'Cerrar sesión',
+      '¿Seguro que quieres salir?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Cerrar sesión',
+          style: 'destructive',
+          onPress: async () => { onClose(); await logout(); },
+        },
+      ],
+    );
   };
-  const items = [
-    { icon: 'account-outline', title: 'Perfil', sub: 'Edita tu información personal' },
+
+  const menuItems = [
     { icon: 'bell-outline', title: 'Notificaciones', sub: 'Gestiona tus notificaciones' },
     { icon: 'lock-outline', title: 'Privacidad', sub: 'Configuración de privacidad' },
     { icon: 'information-outline', title: 'Acerca de', sub: 'Información de la aplicación' },
   ];
+
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <View style={styles.menuContainer}>
-          <View style={styles.menuHeader}>
-            <Text style={styles.menuTitle}>Configuración</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Icon name="close" size={22} color={C.textSoft} />
-            </TouchableOpacity>
-          </View>
-          <View style={{ paddingHorizontal: 20 }}>
-            {items.map(item => (
-              <TouchableOpacity key={item.title} style={styles.settingsItem}>
-                <View style={styles.settingsIconWrap}>
-                  <Icon name={item.icon} size={22} color={C.greenDark} />
-                </View>
-                <View>
-                  <Text style={styles.settingsTitle}>{item.title}</Text>
-                  <Text style={styles.settingsSub}>{item.sub}</Text>
-                </View>
+    <>
+      <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.menuContainer}>
+            <View style={styles.menuHeader}>
+              <Text style={styles.menuTitle}>Configuración</Text>
+              <TouchableOpacity onPress={onClose}>
+                <Icon name="close" size={22} color={C.textSoft} />
               </TouchableOpacity>
-            ))}
+            </View>
+            <View style={{ paddingHorizontal: 20 }}>
+              <TouchableOpacity style={styles.settingsItem} onPress={() => setProfileOpen(true)}>
+                <View style={styles.settingsIconWrap}>
+                  <Icon name="account-outline" size={22} color={C.greenDark} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingsTitle}>Perfil</Text>
+                  <Text style={styles.settingsSub}>{user?.username ?? 'Mi perfil'}</Text>
+                </View>
+                <Icon name="chevron-right" size={20} color={C.textLight} />
+              </TouchableOpacity>
+              {menuItems.map(item => (
+                <TouchableOpacity key={item.title} style={styles.settingsItem}>
+                  <View style={styles.settingsIconWrap}>
+                    <Icon name={item.icon} size={22} color={C.greenDark} />
+                  </View>
+                  <View>
+                    <Text style={styles.settingsTitle}>{item.title}</Text>
+                    <Text style={styles.settingsSub}>{item.sub}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         </View>
-      </View>
-    </Modal>
+      </Modal>
+
+      <Modal visible={profileOpen} animationType="slide" transparent onRequestClose={() => setProfileOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.menuContainer}>
+            <View style={styles.menuHeader}>
+              <TouchableOpacity onPress={() => setProfileOpen(false)}>
+                <Icon name="chevron-left" size={24} color={C.textSoft} />
+              </TouchableOpacity>
+              <Text style={[styles.menuTitle, { flex: 1, textAlign: 'center' }]}>Perfil</Text>
+              <TouchableOpacity onPress={() => { setProfileOpen(false); onClose(); }}>
+                <Icon name="close" size={22} color={C.textSoft} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.profileInfo}>
+              <View style={styles.profileAvatar}>
+                <Text style={{ fontSize: 32 }}>🌱</Text>
+              </View>
+              <Text style={styles.profileName}>{user?.username ?? '—'}</Text>
+              <Text style={styles.profileSub}>Miembro de Lazos</Text>
+            </View>
+            <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+              <Text style={styles.logoutText}>Cerrar sesión</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -576,4 +622,20 @@ const styles = StyleSheet.create({
   },
   settingsTitle: { fontSize: 15, fontWeight: '600', color: C.text },
   settingsSub: { fontSize: 13, color: C.textSoft, marginTop: 2 },
+  profileInfo: {
+    alignItems: 'center', paddingVertical: 28,
+    borderBottomWidth: 1, borderBottomColor: C.beige, marginHorizontal: 20,
+  },
+  profileAvatar: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: C.greenLight, alignItems: 'center', justifyContent: 'center',
+    marginBottom: 12,
+  },
+  profileName: { fontSize: 20, fontWeight: '700', color: C.text },
+  profileSub: { fontSize: 14, color: C.textSoft, marginTop: 4 },
+  logoutBtn: {
+    margin: 20, borderWidth: 1.5, borderColor: '#D9534F',
+    borderRadius: 16, paddingVertical: 14, alignItems: 'center',
+  },
+  logoutText: { color: '#D9534F', fontSize: 15, fontWeight: '700' },
 });
