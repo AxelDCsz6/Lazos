@@ -1,7 +1,5 @@
 // ─── API ──────────────────────────────────────────────────────────────────────
-export const API_BASE_URL = __DEV__
-  ? 'http://187.173.233.24:3000/api' // Android emulator → localhost del host
-  : 'https://187.173.233.24/api';
+export const API_BASE_URL = 'http://187.173.233.24:3000/api'; 
 
 export const API_TIMEOUT = 10000; // 10s
 

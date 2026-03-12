@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,8 +12,10 @@ import {
   FlatList,
   PanResponderGestureState,
   Alert,
+  Platform,
+  NativeModules,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -48,38 +50,197 @@ const MOCK_MESSAGES = [
   { id: '3', text: 'También bien, recordé regar nuestra planta hoy 🌱', time: '14:15', mine: false },
 ];
 
+// ─── Dimensiones del botón de regar ──────────────────────────
+const WATER_BTN_SIZE = 52;
+
+// ─── Partícula de lluvia individual ──────────────────────────
+// Cae desde debajo del botón, se extiende 1.5x el alto del botón
+// y cubre el ancho del botón (52px)
+function RainParticle({
+  offsetX,
+  delay,
+  active,
+}: {
+  offsetX: number;
+  delay: number;
+  active: boolean;
+}) {
+  const anim = useRef(new Animated.Value(0)).current;
+  // Opacidad del contenedor: se pone a 0 de forma instantánea cuando active=false
+  // así las gotas desaparecen inmediatamente sin quedarse estáticas
+  const containerOpacity = useRef(new Animated.Value(0)).current;
+  const loopRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  useEffect(() => {
+    if (active) {
+      containerOpacity.setValue(1);
+      const timeout = setTimeout(() => {
+        loopRef.current = Animated.loop(
+          Animated.timing(anim, {
+            toValue: 1,
+            duration: 500 + delay * 1.2,
+            useNativeDriver: true,
+          }),
+        );
+        loopRef.current.start();
+      }, delay);
+      return () => {
+        clearTimeout(timeout);
+        loopRef.current?.stop();
+        anim.setValue(0);
+      };
+    } else {
+      // Ocultar inmediatamente y detener
+      containerOpacity.setValue(0);
+      loopRef.current?.stop();
+      anim.setValue(0);
+    }
+  }, [active, anim, delay, containerOpacity]);
+
+  const FALL_DISTANCE = WATER_BTN_SIZE * 1.5;
+  const translateY = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, FALL_DISTANCE],
+  });
+  // Fade in/out de la gota individual dentro de su ciclo
+  const dropOpacity = anim.interpolate({
+    inputRange: [0, 0.15, 0.75, 1],
+    outputRange: [0, 0.9, 0.9, 0],
+  });
+
+  return (
+    <Animated.View style={{ position: 'absolute', opacity: containerOpacity }}>
+      <Animated.View
+        style={{
+          position: 'absolute',
+          top: WATER_BTN_SIZE + 2,
+          left: offsetX,
+          width: 2.5,
+          height: 9,
+          borderRadius: 2,
+          backgroundColor: '#5B9BD5',
+          opacity: dropOpacity,
+          transform: [{ translateY }],
+        }}
+      />
+    </Animated.View>
+  );
+}
+
+// ─── Zona de la planta (recuadro verde de referencia) ─────────
+// Posición aproximada del centro de la tarjeta de planta en pantalla
+// Se pasa desde LazosListScreen vía ref
+const PLANT_ZONE = {
+  // Centro aproximado de la tarjeta planta en coordenadas de pantalla
+  // (se mide en runtime con onLayout)
+  x: SW / 2,
+  y: SH * 0.42,
+  radius: SW * 0.38, // radio de detección = mitad del ancho de la tarjeta
+};
+
 // ─── Botón regar drag & drop ──────────────────────────────────
-function WaterButton({ onWater }: { onWater: () => void }) {
+function WaterButton({
+  onWater,
+  plantZone,
+}: {
+  onWater: () => void;
+  plantZone: { x: number; y: number; radius: number };
+}) {
   const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const [watered, setWatered] = useState(false);
+  const [isRaining, setIsRaining] = useState(false);
+
+  // Posición absoluta del botón en pantalla (se actualiza con onLayout)
+  const btnAbsPos = useRef({ x: 0, y: 0 });
+
+  // Partículas: distribuidas uniformemente dentro del ancho del botón
+  const rainParticles = [
+    { offsetX: 4, delay: 0 },
+    { offsetX: 12, delay: 70 },
+    { offsetX: 20, delay: 140 },
+    { offsetX: 30, delay: 35 },
+    { offsetX: 40, delay: 110 },
+    { offsetX: 48, delay: 175 },
+  ];
+
+  const checkNearPlant = useCallback(
+    (absoluteX: number, absoluteY: number): boolean => {
+      const dx = absoluteX - plantZone.x;
+      const dy = absoluteY - plantZone.y;
+      return Math.sqrt(dx * dx + dy * dy) < plantZone.radius;
+    },
+    [plantZone],
+  );
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
         pan.setOffset({ x: (pan.x as any)._value, y: (pan.y as any)._value });
         pan.setValue({ x: 0, y: 0 });
       },
-      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
-        useNativeDriver: false,
-      }),
-      onPanResponderRelease: () => {
+      onPanResponderMove: (_, gs) => {
+        // Actualizar posición del pan
+        (pan.x as any).setValue(gs.dx);
+        (pan.y as any).setValue(gs.dy);
+
+        // Calcular posición absoluta actual del botón
+        const currentX = btnAbsPos.current.x + gs.dx;
+        const currentY = btnAbsPos.current.y + gs.dy;
+        const near = checkNearPlant(currentX, currentY);
+        setIsRaining(near);
+      },
+      onPanResponderRelease: (_, gs) => {
         pan.flattenOffset();
+        const currentX = btnAbsPos.current.x + gs.dx;
+        const currentY = btnAbsPos.current.y + gs.dy;
+        const near = checkNearPlant(currentX, currentY);
+
+        setIsRaining(false);
+
+        if (near) {
+          setWatered(true);
+          onWater();
+        }
+
+        // Volver al origen
+        Animated.spring(pan, {
+          toValue: { x: 0, y: 0 },
+          useNativeDriver: false,
+          tension: 40,
+          friction: 7,
+        }).start(() => {
+          setTimeout(() => setWatered(false), 1500);
+        });
+      },
+      onPanResponderTerminate: () => {
+        pan.flattenOffset();
+        setIsRaining(false);
         Animated.spring(pan, {
           toValue: { x: 0, y: 0 },
           useNativeDriver: false,
           tension: 40,
           friction: 7,
         }).start();
-        setWatered(true);
-        onWater();
-        setTimeout(() => setWatered(false), 2000);
       },
     }),
   ).current;
 
   return (
-    <Animated.View style={{ transform: pan.getTranslateTransform() }} {...panResponder.panHandlers}>
+    <Animated.View
+      style={{ transform: pan.getTranslateTransform() }}
+      {...panResponder.panHandlers}
+      onLayout={e => {
+        e.target.measure((_x, _y, _w, _h, pageX, pageY) => {
+          btnAbsPos.current = { x: pageX + WATER_BTN_SIZE / 2, y: pageY + WATER_BTN_SIZE / 2 };
+        });
+      }}>
+      {/* Lluvia: se renderiza siempre pero solo anima cuando isRaining=true */}
+      {rainParticles.map((p, i) => (
+        <RainParticle key={i} offsetX={p.offsetX} delay={p.delay} active={isRaining} />
+      ))}
+
       <View style={[styles.waterBtnInner, watered && styles.waterBtnWatered]}>
         <Icon name="water" size={24} color="#FFF" />
       </View>
@@ -88,41 +249,51 @@ function WaterButton({ onWater }: { onWater: () => void }) {
 }
 
 // ─── Chat con slide a pantalla completa ───────────────────────
-const CHAT_HALF = SH * 0.28;  // posición inicial: ocupa 72% de pantalla desde abajo
-const CHAT_FULL = 0;           // pantalla completa
+// Panel minimizado arranca en 62% desde arriba → ocupa 38% inferior
+// así el header (~70px) + input (~60px) son siempre visibles sin scroll
+const CHAT_HALF = SH * 0.48;
 
 function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  // El chat lleno deja exactamente el espacio de la barra de estado + un margen de seguridad
+  const CHAT_FULL = insets.top > 0 ? insets.top : (StatusBar.currentHeight ?? 24) + 4;
+
   const translateY = useRef(new Animated.Value(CHAT_HALF)).current;
   const currentSnap = useRef(CHAT_HALF);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const snapTo = (toValue: number) => {
-    currentSnap.current = toValue;
-    setIsFullscreen(toValue === CHAT_FULL);
-    Animated.spring(translateY, {
-      toValue,
-      useNativeDriver: true,
-      tension: 65,
-      friction: 13,
-    }).start();
-  };
+  const snapTo = useCallback(
+    (toValue: number) => {
+      currentSnap.current = toValue;
+      setIsFullscreen(toValue === CHAT_FULL);
+      Animated.spring(translateY, {
+        toValue,
+        useNativeDriver: true,
+        tension: 65,
+        friction: 13,
+      }).start();
+    },
+    [CHAT_FULL, translateY],
+  );
 
-  const handleOpen = () => {
+  const handleOpen = useCallback(() => {
     currentSnap.current = CHAT_HALF;
     setIsFullscreen(false);
     translateY.setValue(CHAT_HALF);
-  };
+  }, [translateY]);
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     Animated.timing(translateY, {
       toValue: SH,
       duration: 220,
       useNativeDriver: true,
     }).start(() => {
-      snapTo(CHAT_HALF);
+      currentSnap.current = CHAT_HALF;
+      setIsFullscreen(false);
+      translateY.setValue(CHAT_HALF);
       onClose();
     });
-  };
+  }, [translateY, onClose]);
 
   const headerPan = useRef(
     PanResponder.create({
@@ -156,7 +327,6 @@ function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void
       onRequestClose={handleClose}
       onShow={handleOpen}>
       <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-        {/* Overlay solo toca para cerrar si no está fullscreen */}
         <TouchableOpacity
           style={[StyleSheet.absoluteFill, { backgroundColor: C.overlay }]}
           onPress={handleClose}
@@ -205,8 +375,8 @@ function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void
             )}
           />
 
-          {/* Input */}
-          <View style={styles.chatInputRow}>
+          {/* Input — siempre visible, con padding para barra de navegación */}
+          <View style={[styles.chatInputRow, { paddingBottom: Math.max(insets.bottom + 8, 16) }]}>
             <TouchableOpacity style={styles.chatPlus}>
               <Icon name="plus" size={22} color={C.textSoft} />
             </TouchableOpacity>
@@ -224,17 +394,25 @@ function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void
 }
 
 // ─── Menú lateral izquierdo ───────────────────────────────────
-function SideMenu({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+function SideMenu({
+  visible,
+  onClose,
+  username,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  username?: string;
+}) {
   const translateX = useRef(new Animated.Value(-SW * 0.78)).current;
 
-  React.useEffect(() => {
+  useEffect(() => {
     Animated.spring(translateX, {
       toValue: visible ? 0 : -SW * 0.78,
       useNativeDriver: true,
       tension: 65,
       friction: 14,
     }).start();
-  }, [visible]);
+  }, [visible, translateX]);
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
@@ -253,7 +431,7 @@ function SideMenu({ visible, onClose }: { visible: boolean; onClose: () => void 
                 <Icon name="sprout" size={26} color={C.green} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.sideMenuUser}>María González</Text>
+                <Text style={styles.sideMenuUser}>{username ?? 'Usuario'}</Text>
                 <Text style={styles.sideMenuSub}>3 lazos activos</Text>
               </View>
               <TouchableOpacity onPress={onClose}>
@@ -294,6 +472,7 @@ function SideMenu({ visible, onClose }: { visible: boolean; onClose: () => void 
   );
 }
 
+// ─── Modal de ajustes ─────────────────────────────────────────
 function SettingsModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { user, logout } = useAuth();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -388,10 +567,27 @@ function SettingsModal({ visible, onClose }: { visible: boolean; onClose: () => 
 
 // ─── Pantalla principal ───────────────────────────────────────
 export function LazosListScreen() {
+  const { user } = useAuth();
   const [streak] = useState(7);
   const [chatOpen, setChatOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Zona de detección de la planta (se actualiza con onLayout de la tarjeta)
+  const [plantZone, setPlantZone] = useState(PLANT_ZONE);
+  const cardRef = useRef<View>(null);
+
+  const onCardLayout = () => {
+    if (cardRef.current) {
+      cardRef.current.measure((_x, _y, w, h, pageX, pageY) => {
+        setPlantZone({
+          x: pageX + w / 2,
+          y: pageY + h / 2,
+          radius: Math.min(w, h) * 0.55,
+        });
+      });
+    }
+  };
 
   return (
     <View style={styles.root}>
@@ -407,7 +603,7 @@ export function LazosListScreen() {
           <TouchableOpacity style={styles.headerBtn} onPress={() => setMenuOpen(true)}>
             <Icon name="menu" size={26} color={C.text} />
           </TouchableOpacity>
-          <Text style={styles.headerName}>María González</Text>
+          <Text style={styles.headerName}>{user?.username ?? 'Lazos'}</Text>
           <TouchableOpacity style={styles.headerBtn} onPress={() => setSettingsOpen(true)}>
             <Icon name="cog-outline" size={26} color={C.text} />
           </TouchableOpacity>
@@ -415,7 +611,10 @@ export function LazosListScreen() {
 
         {/* Tarjeta planta */}
         <View style={styles.cardWrapper}>
-          <View style={styles.card}>
+          <View
+            ref={cardRef}
+            style={styles.card}
+            onLayout={onCardLayout}>
             <Text style={{ fontSize: 64 }}>🌱</Text>
             <Text style={styles.levelText}>Nivel 1</Text>
             <View style={styles.streakBadge}>
@@ -431,12 +630,12 @@ export function LazosListScreen() {
             <Icon name="chat-outline" size={16} color="#FFF" style={{ marginRight: 6 }} />
             <Text style={styles.fabChatText}>Chat</Text>
           </TouchableOpacity>
-          <WaterButton onWater={() => {}} />
+          <WaterButton onWater={() => {}} plantZone={plantZone} />
         </View>
       </SafeAreaView>
 
       <ChatModal visible={chatOpen} onClose={() => setChatOpen(false)} />
-      <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} />
+      <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} username={user?.username} />
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </View>
   );
@@ -495,7 +694,9 @@ const styles = StyleSheet.create({
   },
   fabChatText: { color: '#FFF', fontWeight: '600', fontSize: 14 },
   waterBtnInner: {
-    width: 52, height: 52, borderRadius: 26,
+    width: WATER_BTN_SIZE,
+    height: WATER_BTN_SIZE,
+    borderRadius: WATER_BTN_SIZE / 2,
     backgroundColor: C.water, alignItems: 'center', justifyContent: 'center',
     shadowColor: C.water, shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4, shadowRadius: 8, elevation: 6,
