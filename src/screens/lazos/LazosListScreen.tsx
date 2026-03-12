@@ -17,6 +17,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useAuth } from '../../hooks/useAuth';
+import { LazosModal } from '../../components/LazosModal';
 
 const { width: SW, height: SH } = Dimensions.get('window');
 
@@ -368,14 +369,12 @@ function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void
 
 // ─── Menú lateral izquierdo ───────────────────────────────────
 function SideMenu({
-  visible,
-  onClose,
-  username,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  username?: string;
-}) {
+	visible,
+	onClose,
+	username,
+	onNewLazo 
+    }: { 
+	visible: boolean; onClose: () => void; username?: string; onNewLazo: () => void; }) {
   const translateX = useRef(new Animated.Value(-SW * 0.78)).current;
 
   // ── Estado de edición ──
@@ -384,6 +383,7 @@ function SideMenu({
   const [deletedLazo, setDeletedLazo] = useState<Lazo | null>(null);
   const [editingLazo, setEditingLazo] = useState<Lazo | null>(null);
   const [editName, setEditName] = useState('');
+  const [lazosModalOpen, setLazosModalOpen] = useState(false);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Handlers ──
@@ -426,6 +426,7 @@ function SideMenu({
   }, [visible, translateX]);
 
   return (
+    <>
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
       <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
         <TouchableOpacity
@@ -507,7 +508,7 @@ function SideMenu({
             />
 
             {/* Botón crear lazo */}
-            <TouchableOpacity style={styles.newLazoBtn} onPress={onClose}>
+	    <TouchableOpacity style={styles.newLazoBtn} onPress={() => { onClose(); onNewLazo(); }}>
               <Icon name="plus" size={18} color="#FFF" />
               <Text style={styles.newLazoBtnText}>Crear nuevo lazo</Text>
             </TouchableOpacity>
@@ -555,6 +556,9 @@ function SideMenu({
         </Animated.View>
       </View>
     </Modal>
+
+    <LazosModal visible={lazosModalOpen} onClose={() => setLazosModalOpen(false)} />
+    </>
   );
 }
 
@@ -658,6 +662,7 @@ export function LazosListScreen() {
   const [chatOpen, setChatOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [lazosModalOpen, setLazosModalOpen] = useState(false);
 
   const [plantZone, setPlantZone] = useState(PLANT_ZONE);
   const cardRef = useRef<View>(null);
@@ -717,8 +722,9 @@ export function LazosListScreen() {
       </SafeAreaView>
 
       <ChatModal visible={chatOpen} onClose={() => setChatOpen(false)} />
-      <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} username={user?.username} />
+      <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} username={user?.username} onNewLazo={() => setLazosModalOpen(true)} />
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <LazosModal visible={lazosModalOpen} onClose={() => setLazosModalOpen(false)} />
     </View>
   );
 }

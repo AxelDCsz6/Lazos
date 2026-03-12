@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import lazosRoutes from './routes/lazosRoutes';
+import { startCleanupJob } from './jobs/cleanupCodes';
 import { connectDB } from './config/database';
 import authRoutes from './routes/authRoutes';
 
@@ -20,6 +22,7 @@ app.get('/health', (_req, res) => {
 
 // ─── Rutas ────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
+app.use('/api/lazos', lazosRoutes);
 // Sprint 2: app.use('/api/lazos', lazosRoutes);
 
 // ─── 404 ──────────────────────────────────────────────────────
@@ -32,6 +35,7 @@ connectDB()
   .then(() => {
     app.listen(PORT, () => {
       console.warn(`🚀 Backend corriendo en http://localhost:${PORT}`);
+      startCleanupJob();
     });
   })
   .catch(err => {
