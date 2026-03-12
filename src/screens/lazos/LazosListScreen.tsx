@@ -12,8 +12,7 @@ import {
   FlatList,
   PanResponderGestureState,
   Alert,
-  Platform,
-  NativeModules,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -37,8 +36,11 @@ const C = {
   overlay: 'rgba(40,28,16,0.38)',
 };
 
+// ─── Tipos ────────────────────────────────────────────────────
+type Lazo = { id: string; name: string; level: number; streak: number };
+
 // ─── Datos mock ───────────────────────────────────────────────
-const MOCK_LAZOS = [
+const MOCK_LAZOS: Lazo[] = [
   { id: '1', name: 'Mi primer lazo', level: 1, streak: 7 },
   { id: '2', name: 'Familia', level: 3, streak: 21 },
   { id: '3', name: 'Amigos cercanos', level: 5, streak: 45 },
@@ -54,8 +56,6 @@ const MOCK_MESSAGES = [
 const WATER_BTN_SIZE = 52;
 
 // ─── Partícula de lluvia individual ──────────────────────────
-// Cae desde debajo del botón, se extiende 1.5x el alto del botón
-// y cubre el ancho del botón (52px)
 function RainParticle({
   offsetX,
   delay,
@@ -66,8 +66,6 @@ function RainParticle({
   active: boolean;
 }) {
   const anim = useRef(new Animated.Value(0)).current;
-  // Opacidad del contenedor: se pone a 0 de forma instantánea cuando active=false
-  // así las gotas desaparecen inmediatamente sin quedarse estáticas
   const containerOpacity = useRef(new Animated.Value(0)).current;
   const loopRef = useRef<Animated.CompositeAnimation | null>(null);
 
@@ -90,7 +88,6 @@ function RainParticle({
         anim.setValue(0);
       };
     } else {
-      // Ocultar inmediatamente y detener
       containerOpacity.setValue(0);
       loopRef.current?.stop();
       anim.setValue(0);
@@ -98,11 +95,7 @@ function RainParticle({
   }, [active, anim, delay, containerOpacity]);
 
   const FALL_DISTANCE = WATER_BTN_SIZE * 1.5;
-  const translateY = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, FALL_DISTANCE],
-  });
-  // Fade in/out de la gota individual dentro de su ciclo
+  const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [0, FALL_DISTANCE] });
   const dropOpacity = anim.interpolate({
     inputRange: [0, 0.15, 0.75, 1],
     outputRange: [0, 0.9, 0.9, 0],
@@ -127,15 +120,11 @@ function RainParticle({
   );
 }
 
-// ─── Zona de la planta (recuadro verde de referencia) ─────────
-// Posición aproximada del centro de la tarjeta de planta en pantalla
-// Se pasa desde LazosListScreen vía ref
+// ─── Zona inicial de la planta ────────────────────────────────
 const PLANT_ZONE = {
-  // Centro aproximado de la tarjeta planta en coordenadas de pantalla
-  // (se mide en runtime con onLayout)
   x: SW / 2,
   y: SH * 0.42,
-  radius: SW * 0.38, // radio de detección = mitad del ancho de la tarjeta
+  radius: SW * 0.38,
 };
 
 // ─── Botón regar drag & drop ──────────────────────────────────
@@ -149,11 +138,8 @@ function WaterButton({
   const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const [watered, setWatered] = useState(false);
   const [isRaining, setIsRaining] = useState(false);
-
-  // Posición absoluta del botón en pantalla (se actualiza con onLayout)
   const btnAbsPos = useRef({ x: 0, y: 0 });
 
-  // Partículas: distribuidas uniformemente dentro del ancho del botón
   const rainParticles = [
     { offsetX: 4, delay: 0 },
     { offsetX: 12, delay: 70 },
@@ -164,9 +150,9 @@ function WaterButton({
   ];
 
   const checkNearPlant = useCallback(
-    (absoluteX: number, absoluteY: number): boolean => {
-      const dx = absoluteX - plantZone.x;
-      const dy = absoluteY - plantZone.y;
+    (absX: number, absY: number): boolean => {
+      const dx = absX - plantZone.x;
+      const dy = absY - plantZone.y;
       return Math.sqrt(dx * dx + dy * dy) < plantZone.radius;
     },
     [plantZone],
@@ -181,38 +167,28 @@ function WaterButton({
         pan.setValue({ x: 0, y: 0 });
       },
       onPanResponderMove: (_, gs) => {
-        // Actualizar posición del pan
         (pan.x as any).setValue(gs.dx);
         (pan.y as any).setValue(gs.dy);
-
-        // Calcular posición absoluta actual del botón
-        const currentX = btnAbsPos.current.x + gs.dx;
-        const currentY = btnAbsPos.current.y + gs.dy;
-        const near = checkNearPlant(currentX, currentY);
+        const near = checkNearPlant(
+          btnAbsPos.current.x + gs.dx,
+          btnAbsPos.current.y + gs.dy,
+        );
         setIsRaining(near);
       },
       onPanResponderRelease: (_, gs) => {
         pan.flattenOffset();
-        const currentX = btnAbsPos.current.x + gs.dx;
-        const currentY = btnAbsPos.current.y + gs.dy;
-        const near = checkNearPlant(currentX, currentY);
-
+        const near = checkNearPlant(
+          btnAbsPos.current.x + gs.dx,
+          btnAbsPos.current.y + gs.dy,
+        );
         setIsRaining(false);
-
-        if (near) {
-          setWatered(true);
-          onWater();
-        }
-
-        // Volver al origen
+        if (near) { setWatered(true); onWater(); }
         Animated.spring(pan, {
           toValue: { x: 0, y: 0 },
           useNativeDriver: false,
           tension: 40,
           friction: 7,
-        }).start(() => {
-          setTimeout(() => setWatered(false), 1500);
-        });
+        }).start(() => setTimeout(() => setWatered(false), 1500));
       },
       onPanResponderTerminate: () => {
         pan.flattenOffset();
@@ -236,11 +212,9 @@ function WaterButton({
           btnAbsPos.current = { x: pageX + WATER_BTN_SIZE / 2, y: pageY + WATER_BTN_SIZE / 2 };
         });
       }}>
-      {/* Lluvia: se renderiza siempre pero solo anima cuando isRaining=true */}
       {rainParticles.map((p, i) => (
         <RainParticle key={i} offsetX={p.offsetX} delay={p.delay} active={isRaining} />
       ))}
-
       <View style={[styles.waterBtnInner, watered && styles.waterBtnWatered]}>
         <Icon name="water" size={24} color="#FFF" />
       </View>
@@ -249,13 +223,11 @@ function WaterButton({
 }
 
 // ─── Chat con slide a pantalla completa ───────────────────────
-// Panel minimizado arranca en 62% desde arriba → ocupa 38% inferior
-// así el header (~70px) + input (~60px) son siempre visibles sin scroll
+// 62% desde arriba → panel ocupa 38% inferior (header + input siempre visibles)
 const CHAT_HALF = SH * 0.48;
 
 function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const insets = useSafeAreaInsets();
-  // El chat lleno deja exactamente el espacio de la barra de estado + un margen de seguridad
   const CHAT_FULL = insets.top > 0 ? insets.top : (StatusBar.currentHeight ?? 24) + 4;
 
   const translateY = useRef(new Animated.Value(CHAT_HALF)).current;
@@ -387,6 +359,7 @@ function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void
               <Icon name="send" size={18} color={C.green} />
             </TouchableOpacity>
           </View>
+
         </Animated.View>
       </View>
     </Modal>
@@ -405,6 +378,43 @@ function SideMenu({
 }) {
   const translateX = useRef(new Animated.Value(-SW * 0.78)).current;
 
+  // ── Estado de edición ──
+  const [editMode, setEditMode] = useState(false);
+  const [lazos, setLazos] = useState<Lazo[]>(MOCK_LAZOS);
+  const [deletedLazo, setDeletedLazo] = useState<Lazo | null>(null);
+  const [editingLazo, setEditingLazo] = useState<Lazo | null>(null);
+  const [editName, setEditName] = useState('');
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Handlers ──
+  const handleDelete = (lazo: Lazo) => {
+    setLazos(prev => prev.filter(l => l.id !== lazo.id));
+    setDeletedLazo(lazo);
+    if (undoTimer.current) { clearTimeout(undoTimer.current); }
+    undoTimer.current = setTimeout(() => setDeletedLazo(null), 4000);
+  };
+
+  const handleUndo = () => {
+    if (!deletedLazo) { return; }
+    setLazos(prev => [...prev, deletedLazo]);
+    setDeletedLazo(null);
+    if (undoTimer.current) { clearTimeout(undoTimer.current); }
+  };
+
+  const handleEditOpen = (lazo: Lazo) => {
+    setEditingLazo(lazo);
+    setEditName(lazo.name);
+  };
+
+  const handleEditSave = () => {
+    if (!editingLazo) { return; }
+    setLazos(prev =>
+      prev.map(l => (l.id === editingLazo.id ? { ...l, name: editName.trim() || l.name } : l)),
+    );
+    setEditingLazo(null);
+  };
+
+  // ── Animación slide ──
   useEffect(() => {
     Animated.spring(translateX, {
       toValue: visible ? 0 : -SW * 0.78,
@@ -412,6 +422,7 @@ function SideMenu({
       tension: 65,
       friction: 14,
     }).start();
+    if (!visible) { setEditMode(false); }
   }, [visible, translateX]);
 
   return (
@@ -432,39 +443,114 @@ function SideMenu({
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.sideMenuUser}>{username ?? 'Usuario'}</Text>
-                <Text style={styles.sideMenuSub}>3 lazos activos</Text>
+                <Text style={styles.sideMenuSub}>{lazos.length} lazos activos</Text>
               </View>
               <TouchableOpacity onPress={onClose}>
                 <Icon name="close" size={20} color={C.textSoft} />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.sideMenuSection}>MIS LAZOS</Text>
+            {/* Cabecera sección + botón editar */}
+            <View style={styles.sideMenuSectionRow}>
+              <Text style={styles.sideMenuSection}>MIS LAZOS</Text>
+              <TouchableOpacity
+                onPress={() => setEditMode(e => !e)}
+                style={[styles.editModeBtn, editMode && styles.editModeBtnActive]}>
+                <Icon name="pencil" size={15} color={editMode ? C.greenDark : C.textSoft} />
+              </TouchableOpacity>
+            </View>
 
+            {/* Lista de lazos */}
             <FlatList
-              data={MOCK_LAZOS}
+              data={lazos}
               keyExtractor={i => i.id}
               contentContainerStyle={{ paddingHorizontal: 16 }}
               renderItem={({ item }) => (
-                <TouchableOpacity style={styles.lazoItem} onPress={onClose}>
+                <TouchableOpacity
+                  style={styles.lazoItem}
+                  onPress={editMode ? undefined : onClose}
+                  activeOpacity={editMode ? 1 : 0.7}>
+
+                  {/* Icono izquierdo */}
                   <View style={styles.lazoIconWrap}>
-                    <Icon name="leaf" size={17} color={C.green} />
+                    {editMode ? (
+                      <TouchableOpacity
+                        onPress={() => handleDelete(item)}
+                        style={styles.deleteBtn}>
+                        <Icon name="delete-outline" size={18} color="#D9534F" />
+                      </TouchableOpacity>
+                    ) : (
+                      <Icon name="leaf" size={17} color={C.green} />
+                    )}
                   </View>
+
+                  {/* Nombre y nivel */}
                   <View style={{ flex: 1 }}>
                     <Text style={styles.lazoName}>{item.name}</Text>
                     <Text style={styles.lazoLevel}>Nivel {item.level}</Text>
                   </View>
-                  <View style={styles.lazoStreak}>
-                    <Text style={styles.lazoStreakNum}>{item.streak}</Text>
-                  </View>
+
+                  {/* Icono derecho */}
+                  {editMode ? (
+                    <TouchableOpacity
+                      onPress={() => handleEditOpen(item)}
+                      style={styles.editBtn}>
+                      <Icon name="pencil-outline" size={17} color={C.textSoft} />
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={styles.lazoStreak}>
+                      <Text style={styles.lazoStreakNum}>{item.streak}</Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
               )}
             />
 
+            {/* Botón crear lazo */}
             <TouchableOpacity style={styles.newLazoBtn} onPress={onClose}>
               <Icon name="plus" size={18} color="#FFF" />
               <Text style={styles.newLazoBtnText}>Crear nuevo lazo</Text>
             </TouchableOpacity>
+
+            {/* Snackbar deshacer */}
+            {deletedLazo && (
+              <View style={styles.snackbar}>
+                <Text style={styles.snackbarText}>Lazo eliminado</Text>
+                <TouchableOpacity onPress={handleUndo} style={styles.snackbarBtn}>
+                  <Text style={styles.snackbarBtnText}>Deshacer</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Overlay edición de nombre */}
+            {editingLazo && (
+              <View style={styles.editOverlay}>
+                <View style={styles.editCard}>
+                  <Text style={styles.editCardTitle}>Editar nombre del lazo</Text>
+                  <TextInput
+                    value={editName}
+                    onChangeText={setEditName}
+                    style={styles.editInput}
+                    autoFocus
+                    maxLength={30}
+                    selectTextOnFocus
+                  />
+                  <View style={styles.editCardActions}>
+                    <TouchableOpacity
+                      onPress={() => setEditingLazo(null)}
+                      style={styles.editCancelBtn}>
+                      <Text style={styles.editCancelText}>Cancelar</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={handleEditSave}
+                      style={styles.editSaveBtn}>
+                      <Text style={styles.editSaveText}>Guardar</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            )}
+
           </SafeAreaView>
         </Animated.View>
       </View>
@@ -573,7 +659,6 @@ export function LazosListScreen() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Zona de detección de la planta (se actualiza con onLayout de la tarjeta)
   const [plantZone, setPlantZone] = useState(PLANT_ZONE);
   const cardRef = useRef<View>(null);
 
@@ -611,10 +696,7 @@ export function LazosListScreen() {
 
         {/* Tarjeta planta */}
         <View style={styles.cardWrapper}>
-          <View
-            ref={cardRef}
-            style={styles.card}
-            onLayout={onCardLayout}>
+          <View ref={cardRef} style={styles.card} onLayout={onCardLayout}>
             <Text style={{ fontSize: 64 }}>🌱</Text>
             <Text style={styles.levelText}>Nivel 1</Text>
             <View style={styles.streakBadge}>
@@ -694,9 +776,7 @@ const styles = StyleSheet.create({
   },
   fabChatText: { color: '#FFF', fontWeight: '600', fontSize: 14 },
   waterBtnInner: {
-    width: WATER_BTN_SIZE,
-    height: WATER_BTN_SIZE,
-    borderRadius: WATER_BTN_SIZE / 2,
+    width: WATER_BTN_SIZE, height: WATER_BTN_SIZE, borderRadius: WATER_BTN_SIZE / 2,
     backgroundColor: C.water, alignItems: 'center', justifyContent: 'center',
     shadowColor: C.water, shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4, shadowRadius: 8, elevation: 6,
@@ -707,8 +787,7 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: C.overlay },
   chatContainer: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    height: SH,
-    backgroundColor: C.white,
+    height: SH, backgroundColor: C.white,
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
     overflow: 'hidden',
   },
@@ -719,12 +798,9 @@ const styles = StyleSheet.create({
   },
   chatDragHandle: {
     alignSelf: 'center', width: 36, height: 4,
-    borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.5)',
-    marginBottom: 10,
+    borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.5)', marginBottom: 10,
   },
-  chatHeaderRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-  },
+  chatHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   chatClose: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   chatExpandBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   chatTitle: { color: '#FFF', fontSize: 16, fontWeight: '700' },
@@ -776,10 +852,18 @@ const styles = StyleSheet.create({
   },
   sideMenuUser: { fontSize: 16, fontWeight: '700', color: C.text },
   sideMenuSub: { fontSize: 13, color: C.textSoft, marginTop: 2 },
-  sideMenuSection: {
-    fontSize: 11, fontWeight: '700', color: C.textLight,
-    letterSpacing: 1.2, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8,
+  sideMenuSectionRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8,
   },
+  sideMenuSection: {
+    fontSize: 11, fontWeight: '700', color: C.textLight, letterSpacing: 1.2,
+  },
+  editModeBtn: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: C.beige, alignItems: 'center', justifyContent: 'center',
+  },
+  editModeBtnActive: { backgroundColor: C.greenLight },
   lazoItem: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     paddingVertical: 12, paddingHorizontal: 4,
@@ -788,6 +872,14 @@ const styles = StyleSheet.create({
   lazoIconWrap: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: C.greenLight, alignItems: 'center', justifyContent: 'center',
+  },
+  deleteBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: '#FDE8E8', alignItems: 'center', justifyContent: 'center',
+  },
+  editBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: C.beige, alignItems: 'center', justifyContent: 'center',
   },
   lazoName: { fontSize: 15, fontWeight: '600', color: C.text },
   lazoLevel: { fontSize: 13, color: C.textSoft, marginTop: 1 },
@@ -801,6 +893,50 @@ const styles = StyleSheet.create({
     margin: 20, backgroundColor: C.green, borderRadius: 16, paddingVertical: 14,
   },
   newLazoBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+
+  // ── Snackbar ──
+  snackbar: {
+    position: 'absolute', bottom: 90, left: 16, right: 16,
+    backgroundColor: C.text, borderRadius: 12,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 12, gap: 10,
+    elevation: 8,
+  },
+  snackbarText: { flex: 1, color: '#FFF', fontSize: 13 },
+  snackbarBtn: {
+    backgroundColor: C.green, borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 6,
+  },
+  snackbarBtnText: { color: '#FFF', fontWeight: '700', fontSize: 13 },
+
+  // ── Edición de nombre ──
+  editOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24,
+  },
+  editCard: {
+    backgroundColor: C.white, borderRadius: 20, padding: 24, width: '100%',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
+  },
+  editCardTitle: { fontSize: 16, fontWeight: '700', color: C.text, marginBottom: 16 },
+  editInput: {
+    backgroundColor: C.beige, borderRadius: 12,
+    paddingHorizontal: 16, paddingVertical: 10,
+    fontSize: 15, color: C.text,
+  },
+  editCardActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
+  editCancelBtn: {
+    flex: 1, borderWidth: 1.5, borderColor: C.beige,
+    borderRadius: 12, paddingVertical: 12, alignItems: 'center',
+  },
+  editCancelText: { color: C.textSoft, fontWeight: '600', fontSize: 14 },
+  editSaveBtn: {
+    flex: 1, backgroundColor: C.green,
+    borderRadius: 12, paddingVertical: 12, alignItems: 'center',
+  },
+  editSaveText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
 
   // ── Ajustes ──
   menuContainer: {
