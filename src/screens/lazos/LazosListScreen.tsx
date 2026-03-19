@@ -18,6 +18,12 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useAuth } from '../../hooks/useAuth';
 import { LazosModal } from '../../components/LazosModal';
+import { fetchLazos } from '../../services/lazosService';
+import {
+  getMessages as fetchMessages,
+  sendMessage as apiSendMessage,
+} from '../../services/messages';
+import { Message } from '../../types';
 
 const { width: SW, height: SH } = Dimensions.get('window');
 
@@ -38,20 +44,21 @@ const C = {
 };
 
 // ─── Tipos ────────────────────────────────────────────────────
-type Lazo = { id: string; name: string; level: number; streak: number };
+type Lazo = {
+  id: string;
+  partnerUsername: string;
+  partnerId: string;
+  streak: number;
+  plantPhase: string;
+};
 
-// ─── Datos mock ───────────────────────────────────────────────
-const MOCK_LAZOS: Lazo[] = [
-  { id: '1', name: 'Mi primer lazo', level: 1, streak: 7 },
-  { id: '2', name: 'Familia', level: 3, streak: 21 },
-  { id: '3', name: 'Amigos cercanos', level: 5, streak: 45 },
-];
-
-const MOCK_MESSAGES = [
-  { id: '1', text: '¡Hola! ¿Cómo estás?', time: '10:30', mine: false },
-  { id: '2', text: '¡Muy bien! ¿Y tú?', time: '10:32', mine: true },
-  { id: '3', text: 'También bien, recordé regar nuestra planta hoy 🌱', time: '14:15', mine: false },
-];
+const PHASE_LABEL: Record<string, string> = {
+  seed: 'Semilla',
+  sprout: 'Brote',
+  small: 'Planta pequeña',
+  big: 'Planta grande',
+  flower: 'Florecida',
+};
 
 // ─── Dimensiones del botón de regar ──────────────────────────
 const WATER_BTN_SIZE = 52;
@@ -224,17 +231,143 @@ function WaterButton({
 }
 
 // ─── Chat con slide a pantalla completa ───────────────────────
-// 62% desde arriba → panel ocupa 38% inferior (header + input siempre visibles)
 const CHAT_HALF = SH * 0.48;
 
-function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+function ChatModal({
+  visible,
+  onClose,
+  lazo,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  lazo: Lazo | null;
+}) {
   const insets = useSafeAreaInsets();
   const CHAT_FULL = insets.top > 0 ? insets.top : (StatusBar.currentHeight ?? 24) + 4;
+  const { user } = useAuth();
 
   const translateY = useRef(new Animated.Value(CHAT_HALF)).current;
   const currentSnap = useRef(CHAT_HALF);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // ── Chat state ──
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [hasMore, setHasMore] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [inputText, setInputText] = useState('');
+  const pageRef = useRef(1);
+  const loadingMoreRef = useRef(false);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Fetch helpers ──
+  const loadPage = useCallback(
+    async (page: number) => {
+      if (!lazo) { return; }
+      try {
+        const msgs = await fetchMessages(lazo.id, page);
+        if (page === 1) {
+          setMessages(msgs);
+        } else {
+          setMessages(prev => [...prev, ...msgs]);
+        }
+        setHasMore(msgs.length === 20);
+        pageRef.current = page;
+      } catch {
+        // silent
+      }
+    },
+    [lazo],
+  );
+
+  // ── Start/stop polling when visible changes ──
+  useEffect(() => {
+    if (!visible || !lazo) { return; }
+
+    setMessages([]);
+    setHasMore(true);
+    pageRef.current = 1;
+    loadingMoreRef.current = false;
+
+    loadPage(1);
+
+    pollingRef.current = setInterval(async () => {
+      try {
+        const fresh = await fetchMessages(lazo.id, 1);
+        setMessages(prev => {
+          if (fresh.length === 0) { return prev; }
+          const existingIds = new Set(prev.map(m => m.id));
+          const newOnes = fresh.filter(m => !existingIds.has(m.id));
+          if (newOnes.length === 0) { return prev; }
+          return [...newOnes, ...prev];
+        });
+      } catch {
+        // silent
+      }
+    }, 3000);
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, lazo?.id]);
+
+  // ── Pagination ──
+  const handleEndReached = useCallback(() => {
+    if (!hasMore || loadingMoreRef.current || !lazo) { return; }
+    loadingMoreRef.current = true;
+    const nextPage = pageRef.current + 1;
+    loadPage(nextPage).finally(() => { loadingMoreRef.current = false; });
+  }, [hasMore, lazo, loadPage]);
+
+  // ── Send message ──
+  const handleSend = useCallback(async () => {
+    if (!lazo || !inputText.trim() || sending) { return; }
+    const text = inputText.trim();
+    setInputText('');
+    setSending(true);
+    const tempId = `temp-${Date.now()}`;
+    const optimistic: Message = {
+      id: tempId,
+      lazoId: lazo.id,
+      senderId: user?.id ?? '',
+      content: text,
+      type: 'text',
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    setMessages(prev => [optimistic, ...prev]);
+    try {
+      const sent = await apiSendMessage(lazo.id, text);
+      setMessages(prev => {
+        const mapped = prev.map(m => (m.id === tempId ? sent : m));
+        // Deduplicate in case polling already added it
+        const seen = new Set<string>();
+        return mapped.filter(m => {
+          if (seen.has(m.id)) { return false; }
+          seen.add(m.id);
+          return true;
+        });
+      });
+    } catch (err: any) {
+      setMessages(prev => prev.filter(m => m.id !== tempId));
+      Alert.alert('Error', err.message ?? 'No se pudo enviar el mensaje');
+    } finally {
+      setSending(false);
+    }
+  }, [lazo, inputText, sending, user?.id]);
+
+  const formatTime = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  };
+
+  // ── Slide animation ──
   const snapTo = useCallback(
     (toValue: number) => {
       currentSnap.current = toValue;
@@ -315,7 +448,7 @@ function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void
                 <Icon name="close" size={20} color="#FFF" />
               </TouchableOpacity>
               <View style={{ flex: 1 }}>
-                <Text style={styles.chatTitle}>Mi primer lazo</Text>
+                <Text style={styles.chatTitle}>{lazo?.partnerUsername ?? '—'}</Text>
                 <Text style={styles.chatSubtitle}>En línea</Text>
               </View>
               <TouchableOpacity
@@ -332,32 +465,51 @@ function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void
 
           {/* Mensajes */}
           <FlatList
-            data={MOCK_MESSAGES}
-            keyExtractor={i => i.id}
+            data={messages}
+            inverted
+            keyExtractor={m => m.id}
             style={{ flex: 1, backgroundColor: C.bg }}
             contentContainerStyle={{ padding: 16, gap: 12 }}
-            renderItem={({ item }) => (
-              <View style={[styles.bubble, item.mine ? styles.bubbleMine : styles.bubbleOther]}>
-                <Text style={[styles.bubbleText, item.mine && styles.bubbleTextMine]}>
-                  {item.text}
-                </Text>
-                <Text style={[styles.bubbleTime, item.mine && styles.bubbleTimeMine]}>
-                  {item.time}
-                </Text>
-              </View>
-            )}
+            onEndReached={handleEndReached}
+            onEndReachedThreshold={0.3}
+            renderItem={({ item }) => {
+              const mine = item.senderId === user?.id;
+              return (
+                <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
+                  <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}>
+                    {item.content}
+                  </Text>
+                  <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>
+                    {formatTime(item.createdAt)}
+                  </Text>
+                </View>
+              );
+            }}
           />
 
-          {/* Input — siempre visible, con padding para barra de navegación */}
+          {/* Input */}
           <View style={[styles.chatInputRow, { paddingBottom: Math.max(insets.bottom + 8, 16) }]}>
             <TouchableOpacity style={styles.chatPlus}>
               <Icon name="plus" size={22} color={C.textSoft} />
             </TouchableOpacity>
-            <View style={styles.chatInputWrap}>
-              <Text style={styles.chatInputPlaceholder}>Escribe un mensaje...</Text>
-            </View>
-            <TouchableOpacity style={styles.chatSend}>
-              <Icon name="send" size={18} color={C.green} />
+            <TextInput
+              style={styles.chatInput}
+              value={inputText}
+              onChangeText={setInputText}
+              placeholder="Escribe un mensaje..."
+              placeholderTextColor={C.textLight}
+              multiline
+              maxLength={1000}
+            />
+            <TouchableOpacity
+              style={styles.chatSend}
+              onPress={handleSend}
+              disabled={!inputText.trim() || sending}>
+              <Icon
+                name="send"
+                size={18}
+                color={inputText.trim() && !sending ? C.green : C.textLight}
+              />
             </TouchableOpacity>
           </View>
 
@@ -369,26 +521,39 @@ function ChatModal({ visible, onClose }: { visible: boolean; onClose: () => void
 
 // ─── Menú lateral izquierdo ───────────────────────────────────
 function SideMenu({
-	visible,
-	onClose,
-	username,
-	onNewLazo 
-    }: { 
-	visible: boolean; onClose: () => void; username?: string; onNewLazo: () => void; }) {
+  visible,
+  onClose,
+  username,
+  lazos,
+  onSelectLazo,
+  onNewLazo,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  username?: string;
+  lazos: Lazo[];
+  onSelectLazo: (lazo: Lazo) => void;
+  onNewLazo: () => void;
+}) {
   const translateX = useRef(new Animated.Value(-SW * 0.78)).current;
 
-  // ── Estado de edición ──
+  // ── Estado de edición (in-memory) ──
   const [editMode, setEditMode] = useState(false);
-  const [lazos, setLazos] = useState<Lazo[]>(MOCK_LAZOS);
+  const [localLazos, setLocalLazos] = useState<Lazo[]>(lazos);
   const [deletedLazo, setDeletedLazo] = useState<Lazo | null>(null);
   const [editingLazo, setEditingLazo] = useState<Lazo | null>(null);
   const [editName, setEditName] = useState('');
   const [lazosModalOpen, setLazosModalOpen] = useState(false);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Sync when parent updates lazos
+  useEffect(() => {
+    setLocalLazos(lazos);
+  }, [lazos]);
+
   // ── Handlers ──
   const handleDelete = (lazo: Lazo) => {
-    setLazos(prev => prev.filter(l => l.id !== lazo.id));
+    setLocalLazos(prev => prev.filter(l => l.id !== lazo.id));
     setDeletedLazo(lazo);
     if (undoTimer.current) { clearTimeout(undoTimer.current); }
     undoTimer.current = setTimeout(() => setDeletedLazo(null), 4000);
@@ -396,20 +561,24 @@ function SideMenu({
 
   const handleUndo = () => {
     if (!deletedLazo) { return; }
-    setLazos(prev => [...prev, deletedLazo]);
+    setLocalLazos(prev => [...prev, deletedLazo]);
     setDeletedLazo(null);
     if (undoTimer.current) { clearTimeout(undoTimer.current); }
   };
 
   const handleEditOpen = (lazo: Lazo) => {
     setEditingLazo(lazo);
-    setEditName(lazo.name);
+    setEditName(lazo.partnerUsername);
   };
 
   const handleEditSave = () => {
     if (!editingLazo) { return; }
-    setLazos(prev =>
-      prev.map(l => (l.id === editingLazo.id ? { ...l, name: editName.trim() || l.name } : l)),
+    setLocalLazos(prev =>
+      prev.map(l =>
+        l.id === editingLazo.id
+          ? { ...l, partnerUsername: editName.trim() || l.partnerUsername }
+          : l,
+      ),
     );
     setEditingLazo(null);
   };
@@ -427,137 +596,137 @@ function SideMenu({
 
   return (
     <>
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-        <TouchableOpacity
-          style={[StyleSheet.absoluteFill, { backgroundColor: C.overlay }]}
-          onPress={onClose}
-          activeOpacity={1}
-        />
-        <Animated.View style={[styles.sideMenu, { transform: [{ translateX }] }]}>
-          <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
+      <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <TouchableOpacity
+            style={[StyleSheet.absoluteFill, { backgroundColor: C.overlay }]}
+            onPress={onClose}
+            activeOpacity={1}
+          />
+          <Animated.View style={[styles.sideMenu, { transform: [{ translateX }] }]}>
+            <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
 
-            {/* Perfil */}
-            <View style={styles.sideMenuHeader}>
-              <View style={styles.sideMenuAvatar}>
-                <Icon name="sprout" size={26} color={C.green} />
+              {/* Perfil */}
+              <View style={styles.sideMenuHeader}>
+                <View style={styles.sideMenuAvatar}>
+                  <Icon name="sprout" size={26} color={C.green} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sideMenuUser}>{username ?? 'Usuario'}</Text>
+                  <Text style={styles.sideMenuSub}>{localLazos.length} lazos activos</Text>
+                </View>
+                <TouchableOpacity onPress={onClose}>
+                  <Icon name="close" size={20} color={C.textSoft} />
+                </TouchableOpacity>
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sideMenuUser}>{username ?? 'Usuario'}</Text>
-                <Text style={styles.sideMenuSub}>{lazos.length} lazos activos</Text>
-              </View>
-              <TouchableOpacity onPress={onClose}>
-                <Icon name="close" size={20} color={C.textSoft} />
-              </TouchableOpacity>
-            </View>
 
-            {/* Cabecera sección + botón editar */}
-            <View style={styles.sideMenuSectionRow}>
-              <Text style={styles.sideMenuSection}>MIS LAZOS</Text>
-              <TouchableOpacity
-                onPress={() => setEditMode(e => !e)}
-                style={[styles.editModeBtn, editMode && styles.editModeBtnActive]}>
-                <Icon name="pencil" size={15} color={editMode ? C.greenDark : C.textSoft} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Lista de lazos */}
-            <FlatList
-              data={lazos}
-              keyExtractor={i => i.id}
-              contentContainerStyle={{ paddingHorizontal: 16 }}
-              renderItem={({ item }) => (
+              {/* Cabecera sección + botón editar */}
+              <View style={styles.sideMenuSectionRow}>
+                <Text style={styles.sideMenuSection}>MIS LAZOS</Text>
                 <TouchableOpacity
-                  style={styles.lazoItem}
-                  onPress={editMode ? undefined : onClose}
-                  activeOpacity={editMode ? 1 : 0.7}>
+                  onPress={() => setEditMode(e => !e)}
+                  style={[styles.editModeBtn, editMode && styles.editModeBtnActive]}>
+                  <Icon name="pencil" size={15} color={editMode ? C.greenDark : C.textSoft} />
+                </TouchableOpacity>
+              </View>
 
-                  {/* Icono izquierdo */}
-                  <View style={styles.lazoIconWrap}>
+              {/* Lista de lazos */}
+              <FlatList
+                data={localLazos}
+                keyExtractor={i => i.id}
+                contentContainerStyle={{ paddingHorizontal: 16 }}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.lazoItem}
+                    onPress={editMode ? undefined : () => { onSelectLazo(item); onClose(); }}
+                    activeOpacity={editMode ? 1 : 0.7}>
+
+                    {/* Icono izquierdo */}
+                    <View style={styles.lazoIconWrap}>
+                      {editMode ? (
+                        <TouchableOpacity
+                          onPress={() => handleDelete(item)}
+                          style={styles.deleteBtn}>
+                          <Icon name="delete-outline" size={18} color="#D9534F" />
+                        </TouchableOpacity>
+                      ) : (
+                        <Icon name="leaf" size={17} color={C.green} />
+                      )}
+                    </View>
+
+                    {/* Nombre y fase */}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.lazoName}>{item.partnerUsername}</Text>
+                      <Text style={styles.lazoLevel}>{PHASE_LABEL[item.plantPhase] ?? item.plantPhase}</Text>
+                    </View>
+
+                    {/* Icono derecho */}
                     {editMode ? (
                       <TouchableOpacity
-                        onPress={() => handleDelete(item)}
-                        style={styles.deleteBtn}>
-                        <Icon name="delete-outline" size={18} color="#D9534F" />
+                        onPress={() => handleEditOpen(item)}
+                        style={styles.editBtn}>
+                        <Icon name="pencil-outline" size={17} color={C.textSoft} />
                       </TouchableOpacity>
                     ) : (
-                      <Icon name="leaf" size={17} color={C.green} />
+                      <View style={styles.lazoStreak}>
+                        <Text style={styles.lazoStreakNum}>{item.streak}</Text>
+                      </View>
                     )}
-                  </View>
+                  </TouchableOpacity>
+                )}
+              />
 
-                  {/* Nombre y nivel */}
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.lazoName}>{item.name}</Text>
-                    <Text style={styles.lazoLevel}>Nivel {item.level}</Text>
-                  </View>
+              {/* Botón crear lazo */}
+              <TouchableOpacity style={styles.newLazoBtn} onPress={() => { onClose(); onNewLazo(); }}>
+                <Icon name="plus" size={18} color="#FFF" />
+                <Text style={styles.newLazoBtnText}>Crear nuevo lazo</Text>
+              </TouchableOpacity>
 
-                  {/* Icono derecho */}
-                  {editMode ? (
-                    <TouchableOpacity
-                      onPress={() => handleEditOpen(item)}
-                      style={styles.editBtn}>
-                      <Icon name="pencil-outline" size={17} color={C.textSoft} />
-                    </TouchableOpacity>
-                  ) : (
-                    <View style={styles.lazoStreak}>
-                      <Text style={styles.lazoStreakNum}>{item.streak}</Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
+              {/* Snackbar deshacer */}
+              {deletedLazo && (
+                <View style={styles.snackbar}>
+                  <Text style={styles.snackbarText}>Lazo eliminado</Text>
+                  <TouchableOpacity onPress={handleUndo} style={styles.snackbarBtn}>
+                    <Text style={styles.snackbarBtnText}>Deshacer</Text>
+                  </TouchableOpacity>
+                </View>
               )}
-            />
 
-            {/* Botón crear lazo */}
-	    <TouchableOpacity style={styles.newLazoBtn} onPress={() => { onClose(); onNewLazo(); }}>
-              <Icon name="plus" size={18} color="#FFF" />
-              <Text style={styles.newLazoBtnText}>Crear nuevo lazo</Text>
-            </TouchableOpacity>
-
-            {/* Snackbar deshacer */}
-            {deletedLazo && (
-              <View style={styles.snackbar}>
-                <Text style={styles.snackbarText}>Lazo eliminado</Text>
-                <TouchableOpacity onPress={handleUndo} style={styles.snackbarBtn}>
-                  <Text style={styles.snackbarBtnText}>Deshacer</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* Overlay edición de nombre */}
-            {editingLazo && (
-              <View style={styles.editOverlay}>
-                <View style={styles.editCard}>
-                  <Text style={styles.editCardTitle}>Editar nombre del lazo</Text>
-                  <TextInput
-                    value={editName}
-                    onChangeText={setEditName}
-                    style={styles.editInput}
-                    autoFocus
-                    maxLength={30}
-                    selectTextOnFocus
-                  />
-                  <View style={styles.editCardActions}>
-                    <TouchableOpacity
-                      onPress={() => setEditingLazo(null)}
-                      style={styles.editCancelBtn}>
-                      <Text style={styles.editCancelText}>Cancelar</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={handleEditSave}
-                      style={styles.editSaveBtn}>
-                      <Text style={styles.editSaveText}>Guardar</Text>
-                    </TouchableOpacity>
+              {/* Overlay edición de nombre */}
+              {editingLazo && (
+                <View style={styles.editOverlay}>
+                  <View style={styles.editCard}>
+                    <Text style={styles.editCardTitle}>Editar nombre del lazo</Text>
+                    <TextInput
+                      value={editName}
+                      onChangeText={setEditName}
+                      style={styles.editInput}
+                      autoFocus
+                      maxLength={30}
+                      selectTextOnFocus
+                    />
+                    <View style={styles.editCardActions}>
+                      <TouchableOpacity
+                        onPress={() => setEditingLazo(null)}
+                        style={styles.editCancelBtn}>
+                        <Text style={styles.editCancelText}>Cancelar</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={handleEditSave}
+                        style={styles.editSaveBtn}>
+                        <Text style={styles.editSaveText}>Guardar</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 </View>
-              </View>
-            )}
+              )}
 
-          </SafeAreaView>
-        </Animated.View>
-      </View>
-    </Modal>
+            </SafeAreaView>
+          </Animated.View>
+        </View>
+      </Modal>
 
-    <LazosModal visible={lazosModalOpen} onClose={() => setLazosModalOpen(false)} />
+      <LazosModal visible={lazosModalOpen} onClose={() => setLazosModalOpen(false)} />
     </>
   );
 }
@@ -658,14 +827,34 @@ function SettingsModal({ visible, onClose }: { visible: boolean; onClose: () => 
 // ─── Pantalla principal ───────────────────────────────────────
 export function LazosListScreen() {
   const { user } = useAuth();
-  const [streak] = useState(7);
   const [chatOpen, setChatOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lazosModalOpen, setLazosModalOpen] = useState(false);
 
+  const [lazos, setLazos] = useState<Lazo[]>([]);
+  const [activeLazo, setActiveLazo] = useState<Lazo | null>(null);
+
   const [plantZone, setPlantZone] = useState(PLANT_ZONE);
   const cardRef = useRef<View>(null);
+
+  useEffect(() => {
+    fetchLazos()
+      .then(raw => {
+        const mapped: Lazo[] = raw.map((l: any) => ({
+          id: l.id,
+          partnerUsername: l.partner_username,
+          partnerId: l.partner_id,
+          streak: l.streak,
+          plantPhase: l.plant_phase,
+        }));
+        setLazos(mapped);
+        if (mapped.length > 0) { setActiveLazo(mapped[0]); }
+      })
+      .catch(() => {
+        // silencioso; el usuario puede reintentar abriendo el menú
+      });
+  }, []);
 
   const onCardLayout = () => {
     if (cardRef.current) {
@@ -703,9 +892,11 @@ export function LazosListScreen() {
         <View style={styles.cardWrapper}>
           <View ref={cardRef} style={styles.card} onLayout={onCardLayout}>
             <Text style={{ fontSize: 64 }}>🌱</Text>
-            <Text style={styles.levelText}>Nivel 1</Text>
+            <Text style={styles.levelText}>
+              {activeLazo ? PHASE_LABEL[activeLazo.plantPhase] ?? activeLazo.plantPhase : 'Sin lazos'}
+            </Text>
             <View style={styles.streakBadge}>
-              <Text style={styles.streakNumber}>{streak}</Text>
+              <Text style={styles.streakNumber}>{activeLazo?.streak ?? 0}</Text>
               <Text style={styles.streakLabel}> días de racha</Text>
             </View>
           </View>
@@ -713,7 +904,10 @@ export function LazosListScreen() {
 
         {/* FABs */}
         <View style={styles.fabArea}>
-          <TouchableOpacity style={styles.fabChat} onPress={() => setChatOpen(true)}>
+          <TouchableOpacity
+            style={[styles.fabChat, !activeLazo && { opacity: 0.5 }]}
+            onPress={() => activeLazo && setChatOpen(true)}
+            disabled={!activeLazo}>
             <Icon name="chat-outline" size={16} color="#FFF" style={{ marginRight: 6 }} />
             <Text style={styles.fabChatText}>Chat</Text>
           </TouchableOpacity>
@@ -721,8 +915,15 @@ export function LazosListScreen() {
         </View>
       </SafeAreaView>
 
-      <ChatModal visible={chatOpen} onClose={() => setChatOpen(false)} />
-      <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} username={user?.username} onNewLazo={() => setLazosModalOpen(true)} />
+      <ChatModal visible={chatOpen} onClose={() => setChatOpen(false)} lazo={activeLazo} />
+      <SideMenu
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        username={user?.username}
+        lazos={lazos}
+        onSelectLazo={lazo => setActiveLazo(lazo)}
+        onNewLazo={() => setLazosModalOpen(true)}
+      />
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <LazosModal visible={lazosModalOpen} onClose={() => setLazosModalOpen(false)} />
     </View>
@@ -830,11 +1031,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: C.beige,
   },
   chatPlus: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  chatInputWrap: {
+  chatInput: {
     flex: 1, backgroundColor: C.beige, borderRadius: 20,
     paddingHorizontal: 16, paddingVertical: 10,
+    maxHeight: 100, fontSize: 14, color: C.text,
   },
-  chatInputPlaceholder: { color: C.textLight, fontSize: 14 },
   chatSend: {
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: C.beige, alignItems: 'center', justifyContent: 'center',
