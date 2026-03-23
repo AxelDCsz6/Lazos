@@ -838,7 +838,7 @@ export function LazosListScreen() {
   const [plantZone, setPlantZone] = useState(PLANT_ZONE);
   const cardRef = useRef<View>(null);
 
-  useEffect(() => {
+  const loadLazos = useCallback(() => {
     fetchLazos()
       .then(raw => {
         const mapped: Lazo[] = raw.map((l: any) => ({
@@ -851,10 +851,10 @@ export function LazosListScreen() {
         setLazos(mapped);
         if (mapped.length > 0) { setActiveLazo(mapped[0]); }
       })
-      .catch(() => {
-        // silencioso; el usuario puede reintentar abriendo el menú
-      });
+      .catch(() => {});
   }, []);
+
+  useEffect(() => { loadLazos(); }, [loadLazos]);
 
   const onCardLayout = () => {
     if (cardRef.current) {
@@ -925,7 +925,7 @@ export function LazosListScreen() {
         onNewLazo={() => setLazosModalOpen(true)}
       />
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <LazosModal visible={lazosModalOpen} onClose={() => setLazosModalOpen(false)} />
+      <LazosModal visible={lazosModalOpen} onClose={() => setLazosModalOpen(false)} onLazoCreated={loadLazos} />
     </View>
   );
 }
