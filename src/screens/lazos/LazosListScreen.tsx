@@ -18,7 +18,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useAuth } from '../../hooks/useAuth';
 import { LazosModal } from '../../components/LazosModal';
-import { fetchLazos } from '../../services/lazosService';
+import { fetchLazos, waterLazo as waterLazoApi } from '../../services/lazosService';
 import {
   getMessages as fetchMessages,
   sendMessage as apiSendMessage,
@@ -50,14 +50,28 @@ type Lazo = {
   partnerId: string;
   streak: number;
   plantPhase: string;
+  plantXp: number;
+  iWateredToday: boolean;
+  partnerWateredToday: boolean;
+  daysWithoutMutual: number;
 };
 
 const PHASE_LABEL: Record<string, string> = {
-  seed: 'Semilla',
+  seed:   'Semilla',
   sprout: 'Brote',
-  small: 'Planta pequeña',
-  big: 'Planta grande',
+  small:  'Planta pequeña',
+  big:    'Planta grande',
   flower: 'Florecida',
+  dead:   'Planta muerta',
+};
+
+const PHASE_EMOJI: Record<string, string> = {
+  seed:   '🌱',
+  sprout: '🪴',
+  small:  '🌿',
+  big:    '🌳',
+  flower: '🌸',
+  dead:   '🥀',
 };
 
 // ─── Dimensiones del botón de regar ──────────────────────────
@@ -139,14 +153,18 @@ const PLANT_ZONE = {
 function WaterButton({
   onWater,
   plantZone,
+  disabled,
 }: {
   onWater: () => void;
   plantZone: { x: number; y: number; radius: number };
+  disabled?: boolean;
 }) {
   const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const [watered, setWatered] = useState(false);
   const [isRaining, setIsRaining] = useState(false);
   const btnAbsPos = useRef({ x: 0, y: 0 });
+  const disabledRef = useRef(disabled ?? false);
+  disabledRef.current = disabled ?? false;
 
   const rainParticles = [
     { offsetX: 4, delay: 0 },
@@ -168,8 +186,8 @@ function WaterButton({
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: () => !disabledRef.current,
+      onMoveShouldSetPanResponder: () => !disabledRef.current,
       onPanResponderGrant: () => {
         pan.setOffset({ x: (pan.x as any)._value, y: (pan.y as any)._value });
         pan.setValue({ x: 0, y: 0 });
@@ -214,17 +232,21 @@ function WaterButton({
   return (
     <Animated.View
       style={{ transform: pan.getTranslateTransform() }}
-      {...panResponder.panHandlers}
+      {...(disabled ? {} : panResponder.panHandlers)}
       onLayout={e => {
         e.target.measure((_x, _y, _w, _h, pageX, pageY) => {
           btnAbsPos.current = { x: pageX + WATER_BTN_SIZE / 2, y: pageY + WATER_BTN_SIZE / 2 };
         });
       }}>
-      {rainParticles.map((p, i) => (
+      {!disabled && rainParticles.map((p, i) => (
         <RainParticle key={i} offsetX={p.offsetX} delay={p.delay} active={isRaining} />
       ))}
-      <View style={[styles.waterBtnInner, watered && styles.waterBtnWatered]}>
-        <Icon name="water" size={24} color="#FFF" />
+      <View style={[
+        styles.waterBtnInner,
+        watered && styles.waterBtnWatered,
+        disabled && styles.waterBtnDone,
+      ]}>
+        <Icon name={disabled ? 'check' : 'water'} size={24} color="#FFF" />
       </View>
     </Animated.View>
   );
@@ -845,16 +867,46 @@ export function LazosListScreen() {
           id: l.id,
           partnerUsername: l.partner_username,
           partnerId: l.partner_id,
-          streak: l.streak,
+          streak: Number(l.streak),
           plantPhase: l.plant_phase,
+          plantXp: Number(l.plant_xp),
+          iWateredToday: Boolean(l.i_watered_today),
+          partnerWateredToday: Boolean(l.partner_watered_today),
+          daysWithoutMutual: Number(l.days_without_mutual ?? 0),
         }));
         setLazos(mapped);
-        if (mapped.length > 0) { setActiveLazo(mapped[0]); }
+        setActiveLazo(prev => {
+          if (!prev) { return mapped.length > 0 ? mapped[0] : null; }
+          // Actualizar activeLazo con datos frescos si sigue existiendo
+          const fresh = mapped.find(l => l.id === prev.id);
+          return fresh ?? (mapped.length > 0 ? mapped[0] : null);
+        });
       })
       .catch(() => {});
   }, []);
 
   useEffect(() => { loadLazos(); }, [loadLazos]);
+
+  const handleWater = useCallback(async () => {
+    if (!activeLazo) { return; }
+    try {
+      const result = await waterLazoApi(activeLazo.id);
+      const updater = (l: Lazo): Lazo => l.id === activeLazo.id
+        ? {
+            ...l,
+            streak: result.streak,
+            plantPhase: result.plantPhase,
+            plantXp: result.plantXp,
+            iWateredToday: true,
+            partnerWateredToday: result.partnerWateredToday,
+          }
+        : l;
+      setLazos(prev => prev.map(updater));
+      setActiveLazo(prev => prev ? updater(prev) : prev);
+    } catch (err: any) {
+      Alert.alert('Error', err.message ?? 'No se pudo regar');
+    }
+  }, [activeLazo]);
 
   const onCardLayout = () => {
     if (cardRef.current) {
@@ -891,7 +943,20 @@ export function LazosListScreen() {
         {/* Tarjeta planta */}
         <View style={styles.cardWrapper}>
           <View ref={cardRef} style={styles.card} onLayout={onCardLayout}>
-            <Text style={{ fontSize: 64 }}>🌱</Text>
+            {/* Aviso de peligro */}
+            {activeLazo && activeLazo.daysWithoutMutual >= 3 && activeLazo.plantPhase !== 'dead' && (
+              <View style={styles.warningBadge}>
+                <Text style={styles.warningText}>
+                  ⚠️ {activeLazo.daysWithoutMutual} día{activeLazo.daysWithoutMutual !== 1 ? 's' : ''} sin regar juntos
+                </Text>
+              </View>
+            )}
+
+            {/* Emoji de fase */}
+            <Text style={{ fontSize: 64 }}>
+              {activeLazo ? (PHASE_EMOJI[activeLazo.plantPhase] ?? '🌱') : '🌱'}
+            </Text>
+
             <Text style={styles.levelText}>
               {activeLazo ? PHASE_LABEL[activeLazo.plantPhase] ?? activeLazo.plantPhase : 'Sin lazos'}
             </Text>
@@ -899,6 +964,32 @@ export function LazosListScreen() {
               <Text style={styles.streakNumber}>{activeLazo?.streak ?? 0}</Text>
               <Text style={styles.streakLabel}> días de racha</Text>
             </View>
+
+            {/* Indicadores de riego */}
+            {activeLazo && (
+              <View style={styles.wateringRow}>
+                <View style={styles.wateringItem}>
+                  <View style={[styles.wateringCircle, activeLazo.iWateredToday && styles.wateringCircleActive]}>
+                    <Icon
+                      name={activeLazo.iWateredToday ? 'water' : 'water-outline'}
+                      size={15}
+                      color={activeLazo.iWateredToday ? '#FFF' : C.textLight}
+                    />
+                  </View>
+                  <Text style={styles.wateringLabel}>Tú</Text>
+                </View>
+                <View style={styles.wateringItem}>
+                  <View style={[styles.wateringCircle, activeLazo.partnerWateredToday && styles.wateringCircleActive]}>
+                    <Icon
+                      name={activeLazo.partnerWateredToday ? 'water' : 'water-outline'}
+                      size={15}
+                      color={activeLazo.partnerWateredToday ? '#FFF' : C.textLight}
+                    />
+                  </View>
+                  <Text style={styles.wateringLabel}>{activeLazo.partnerUsername.charAt(0).toUpperCase()}</Text>
+                </View>
+              </View>
+            )}
           </View>
         </View>
 
@@ -911,7 +1002,11 @@ export function LazosListScreen() {
             <Icon name="chat-outline" size={16} color="#FFF" style={{ marginRight: 6 }} />
             <Text style={styles.fabChatText}>Chat</Text>
           </TouchableOpacity>
-          <WaterButton onWater={() => {}} plantZone={plantZone} />
+          <WaterButton
+            onWater={handleWater}
+            plantZone={plantZone}
+            disabled={!activeLazo || activeLazo.iWateredToday}
+          />
         </View>
       </SafeAreaView>
 
@@ -989,6 +1084,35 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4, shadowRadius: 8, elevation: 6,
   },
   waterBtnWatered: { backgroundColor: C.green },
+  waterBtnDone: { backgroundColor: C.greenDark },
+
+  // ── Indicadores de riego ──
+  warningBadge: {
+    backgroundColor: '#FFF3CD',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    marginBottom: 10,
+  },
+  warningText: { fontSize: 12, color: '#856404', fontWeight: '500' },
+  wateringRow: {
+    flexDirection: 'row', gap: 20, marginTop: 14,
+  },
+  wateringItem: {
+    alignItems: 'center', gap: 4,
+  },
+  wateringCircle: {
+    width: 36, height: 36, borderRadius: 18,
+    borderWidth: 1.5, borderColor: C.textLight,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  wateringCircleActive: {
+    backgroundColor: C.green,
+    borderColor: C.green,
+  },
+  wateringLabel: {
+    fontSize: 11, color: C.textLight, fontWeight: '500',
+  },
 
   // ── Chat ──
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: C.overlay },

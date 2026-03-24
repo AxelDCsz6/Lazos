@@ -20,10 +20,11 @@ CREATE TABLE lazos (
   user1_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   user2_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   streak      INTEGER     NOT NULL DEFAULT 0,
-  plant_phase VARCHAR(10) NOT NULL DEFAULT 'seed'
-              CHECK (plant_phase IN ('seed','sprout','small','big','flower')),
-  plant_xp    INTEGER     NOT NULL DEFAULT 0,
-  is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
+  plant_phase           VARCHAR(10) NOT NULL DEFAULT 'seed'
+                        CHECK (plant_phase IN ('seed','sprout','small','big','flower','dead')),
+  plant_xp              INTEGER     NOT NULL DEFAULT 0,
+  last_mutual_watering_on DATE,
+  is_active             BOOLEAN     NOT NULL DEFAULT TRUE,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT different_users CHECK (user1_id <> user2_id),

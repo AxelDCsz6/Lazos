@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import lazosRoutes from './routes/lazosRoutes';
 import { startCleanupJob } from './jobs/cleanupCodes';
+import { startStreakJob } from './jobs/streakJob';
 import { connectDB } from './config/database';
 import authRoutes from './routes/authRoutes';
 
@@ -36,6 +37,7 @@ connectDB()
     app.listen(PORT, () => {
       console.warn(`🚀 Backend corriendo en http://localhost:${PORT}`);
       startCleanupJob();
+      startStreakJob();
     });
   })
   .catch(err => {
