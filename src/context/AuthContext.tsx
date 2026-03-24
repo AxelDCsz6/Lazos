@@ -5,6 +5,7 @@ import {
   register as registerService,
   logout as logoutService,
 } from '../services/authService';
+import { registerForPushNotifications, listenForTokenRefresh } from '../services/notificationService';
 import { User } from '../types';
 
 interface AuthContextValue {
@@ -28,23 +29,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const token = await getToken();
         if (!token) return;
         const savedUser = await getSavedUser();
-        if (savedUser) setUser(savedUser);
+        if (savedUser) {
+          setUser(savedUser);
+          // Registrar token FCM al restaurar sesión
+          registerForPushNotifications().catch(() => {});
+        }
       } catch {
         // sesión no disponible
       } finally {
         setIsLoading(false);
       }
     })();
+
+    // Escuchar rotación de token mientras la sesión esté activa
+    const unsubscribeRefresh = listenForTokenRefresh();
+    return unsubscribeRefresh;
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
     const { user: loggedUser } = await loginService(username, password);
     setUser(loggedUser);
+    registerForPushNotifications().catch(() => {});
   }, []);
 
   const register = useCallback(async (username: string, password: string) => {
     const { user: newUser } = await registerService(username, password);
     setUser(newUser);
+    registerForPushNotifications().catch(() => {});
   }, []);
 
   const logout = useCallback(async () => {

@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { db } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
+import { notifyWatering } from '../services/notificationService';
 
 // ─── Helpers ──────────────────────────────────────────────────
 function computePlantPhase(xp: number): string {
@@ -281,6 +282,11 @@ export async function waterLazo(req: AuthRequest, res: Response): Promise<void> 
       plantXp,
       justStreaked,
     });
+
+    // Notificar al compañero del riego (fire-and-forget)
+    if (isFirstWateringToday) {
+      notifyWatering(lazoId, userId, justStreaked).catch(() => {});
+    }
   } catch (err) {
     console.error('[lazos/regar]', err);
     res.status(500).json({ message: 'Error al regar' });

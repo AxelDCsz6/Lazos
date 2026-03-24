@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { db } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
+import { notifyNewMessage } from '../services/notificationService';
 
 // ─── Helper: verifica que el usuario pertenece al lazo ────────
 async function checkLazoAccess(lazoId: string, userId: string): Promise<boolean> {
@@ -72,7 +73,11 @@ export async function sendMessage(req: AuthRequest, res: Response): Promise<void
       [lazoId, userId, content.trim()],
     );
 
-    res.status(201).json({ message: result.rows[0] });
+    const msg = result.rows[0];
+    res.status(201).json({ message: msg });
+
+    // Notificación al compañero (fire-and-forget, no bloquea la respuesta)
+    notifyNewMessage(lazoId, userId, content.trim()).catch(() => {});
   } catch (err) {
     console.error('[messages/send]', err);
     res.status(500).json({ message: 'Error enviando mensaje' });

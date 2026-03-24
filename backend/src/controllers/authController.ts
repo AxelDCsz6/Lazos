@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../config/database';
+import { AuthRequest } from '../middleware/auth';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -56,4 +57,16 @@ export async function login(req: Request, res: Response): Promise<void> {
     token,
     user: { id: user.id, username: user.username, createdAt: user.created_at },
   });
+}
+
+// ─── PUT /api/auth/fcm-token ───────────────────────────────────
+export async function updateFcmToken(req: AuthRequest, res: Response): Promise<void> {
+  const userId = req.userId;
+  if (!userId) { res.status(401).json({ message: 'No autorizado' }); return; }
+
+  const { token } = req.body as { token?: string };
+  if (!token) { res.status(400).json({ message: 'Token requerido' }); return; }
+
+  await db.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [token, userId]);
+  res.json({ success: true });
 }

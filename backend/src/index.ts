@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import lazosRoutes from './routes/lazosRoutes';
 import { startCleanupJob } from './jobs/cleanupCodes';
 import { startStreakJob } from './jobs/streakJob';
+import { startDailyReminderJob } from './jobs/dailyReminderJob';
 import { connectDB } from './config/database';
 import authRoutes from './routes/authRoutes';
 
@@ -38,6 +39,7 @@ connectDB()
       console.warn(`🚀 Backend corriendo en http://localhost:${PORT}`);
       startCleanupJob();
       startStreakJob();
+      startDailyReminderJob();
     });
   })
   .catch(err => {

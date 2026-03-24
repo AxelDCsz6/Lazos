@@ -66,6 +66,10 @@ yarn-error.log
 # testing
 /coverage
 
+# Firebase service account (credentials secretas)
+backend/firebase-service-account.json
+android/app/google-services.json
+
 # Yarn
 .yarn/*
 !.yarn/patches

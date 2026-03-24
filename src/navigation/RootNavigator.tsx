@@ -1,16 +1,25 @@
-import React from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import React, { useEffect } from 'react';
+import { View, ActivityIndicator, StyleSheet, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../hooks/useAuth';
 import { AuthStack } from './AuthStack';
 import { AppTabs } from './AppTabs';
 import { RootStackParamList } from '../types';
+import { setupForegroundHandler } from '../services/notificationService';
 
 const Root = createNativeStackNavigator<RootStackParamList>();
 
 export function RootNavigator() {
   const { isAuthenticated, isLoading } = useAuth();
+
+  useEffect(() => {
+    const unsubscribe = setupForegroundHandler((title, body) => {
+      // Mostrar un banner simple cuando la app está en primer plano
+      Alert.alert(title, body);
+    });
+    return unsubscribe;
+  }, []);
 
   if (isLoading) {
     return (
