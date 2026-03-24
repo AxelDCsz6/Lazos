@@ -68,6 +68,7 @@ yarn-error.log
 
 # Firebase service account (credentials secretas)
 backend/firebase-service-account.json
+backend/*firebase-adminsdk*.json
 android/app/google-services.json
 
 # Yarn
