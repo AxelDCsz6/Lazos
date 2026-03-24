@@ -1,6 +1,10 @@
 import { db } from '../config/database';
 
-// Mata plantas que llevan 5 o más días sin riego mutuo
+const TZ = 'America/Mexico_City';
+
+// Mata plantas que llevan 5 o más días sin riego mutuo.
+// CURRENT_DATE en las queries ya opera en hora CDMX gracias al
+// timezone configurado en database.ts.
 async function checkPlantDeaths(): Promise<void> {
   try {
     const result = await db.query(
@@ -23,23 +27,36 @@ async function checkPlantDeaths(): Promise<void> {
   }
 }
 
-function msUntilNextMidnightUTC(): number {
+// Calcula los ms que faltan hasta las 00:00:00 en zona CDMX.
+// Usa Intl para manejar automáticamente el cambio de horario de verano.
+function msUntilNextMidnightCDMX(): number {
   const now = new Date();
-  const midnight = new Date(Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() + 1,
-  ));
-  return midnight.getTime() - now.getTime();
+
+  // Hora actual descompuesta en CDMX
+  const timeStr = now.toLocaleTimeString('en-GB', {
+    timeZone: TZ,
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const [h, m, s] = timeStr.split(':').map(Number);
+
+  const secsFromMidnight = h * 3600 + m * 60 + s;
+  const secsUntilMidnight = 86400 - secsFromMidnight;
+  return secsUntilMidnight * 1000;
 }
 
 export function startStreakJob(): void {
   const scheduleNext = () => {
-    const delay = msUntilNextMidnightUTC();
-    const nextRun = new Date(Date.now() + delay).toISOString();
-    console.log(`[streakJob] Próxima ejecución: ${nextRun}`);
+    const delay = msUntilNextMidnightCDMX();
+
+    // Log en hora CDMX para que sea legible
+    const nextRun = new Date(Date.now() + delay).toLocaleString('es-MX', {
+      timeZone: TZ, dateStyle: 'short', timeStyle: 'short',
+    });
+    console.log(`[streakJob] Próxima ejecución: ${nextRun} CDMX`);
 
     setTimeout(async () => {
+      console.log('[streakJob] Ejecutando revisión de plantas...');
       await checkPlantDeaths();
       scheduleNext();
     }, delay);

@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   PanResponder,
   Animated,
+  Easing,
   StatusBar,
   Modal,
   FlatList,
@@ -18,6 +19,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useAuth } from '../../hooks/useAuth';
 import { LazosModal } from '../../components/LazosModal';
+import { AnimatedPlant } from '../../components/AnimatedPlant';
 import { fetchLazos, waterLazo as waterLazoApi } from '../../services/lazosService';
 import {
   getMessages as fetchMessages,
@@ -142,6 +144,82 @@ function RainParticle({
   );
 }
 
+// ─── Indicador de riego animado ───────────────────────────────
+const INDICATOR_SIZE = 44;
+
+function WateringIndicator({ active, label }: { active: boolean; label: string }) {
+  const fillAnim = useRef(new Animated.Value(0)).current;
+  const waveAnim = useRef(new Animated.Value(0)).current;
+  const waveLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    const startWave = () => {
+      waveLoopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(waveAnim, { toValue: 1, duration: 1600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+          Animated.timing(waveAnim, { toValue: 0, duration: 1600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        ]),
+      );
+      waveLoopRef.current.start();
+    };
+
+    if (active) {
+      // Al cargar: llenar inmediatamente. Al activar: animar el llenado.
+      const duration = isFirstRender.current ? 0 : 1000;
+      isFirstRender.current = false;
+      Animated.timing(fillAnim, {
+        toValue: 1,
+        duration,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start(({ finished }) => { if (finished) { startWave(); } });
+    } else {
+      isFirstRender.current = false;
+      waveLoopRef.current?.stop();
+      waveAnim.setValue(0);
+      Animated.timing(fillAnim, { toValue: 0, duration: 300, useNativeDriver: true }).start();
+    }
+
+    return () => { waveLoopRef.current?.stop(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
+  // El agua sube: translateY va de +INDICATOR_SIZE (oculta abajo) a 0 (llena)
+  const translateY = fillAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [INDICATOR_SIZE, 0],
+  });
+  // La ola se mueve ±10px horizontalmente
+  const waveX = waveAnim.interpolate({ inputRange: [0, 1], outputRange: [-10, 10] });
+  const waveX2 = waveAnim.interpolate({ inputRange: [0, 1], outputRange: [8, -8] });
+
+  return (
+    <View style={styles.wateringItem}>
+      <View style={[styles.wateringCircle, active && styles.wateringCircleActive]}>
+        {/* Agua que sube desde abajo */}
+        <Animated.View
+          style={[styles.waterFillContainer, { transform: [{ translateY }] }]}>
+          {/* Superficie: dos olas superpuestas */}
+          <Animated.View style={[styles.waveCap, styles.waveCap1, { transform: [{ translateX: waveX }] }]} />
+          <Animated.View style={[styles.waveCap, styles.waveCap2, { transform: [{ translateX: waveX2 }] }]} />
+          {/* Cuerpo sólido del agua */}
+          <View style={styles.waterBody} />
+        </Animated.View>
+        {/* Ícono siempre encima */}
+        <View style={styles.waterIconOverlay}>
+          <Icon
+            name={active ? 'water' : 'water-outline'}
+            size={16}
+            color={active ? '#FFF' : C.textLight}
+          />
+        </View>
+      </View>
+      <Text style={[styles.wateringLabel, active && styles.wateringLabelActive]}>{label}</Text>
+    </View>
+  );
+}
+
 // ─── Zona inicial de la planta ────────────────────────────────
 const PLANT_ZONE = {
   x: SW / 2,
@@ -163,8 +241,15 @@ function WaterButton({
   const [watered, setWatered] = useState(false);
   const [isRaining, setIsRaining] = useState(false);
   const btnAbsPos = useRef({ x: 0, y: 0 });
+
+  // Refs para que el PanResponder (creado una sola vez) siempre use
+  // los valores más recientes de disabled, plantZone y onWater
   const disabledRef = useRef(disabled ?? false);
+  const plantZoneRef = useRef(plantZone);
+  const onWaterRef = useRef(onWater);
   disabledRef.current = disabled ?? false;
+  plantZoneRef.current = plantZone;
+  onWaterRef.current = onWater;
 
   const rainParticles = [
     { offsetX: 4, delay: 0 },
@@ -175,14 +260,12 @@ function WaterButton({
     { offsetX: 48, delay: 175 },
   ];
 
-  const checkNearPlant = useCallback(
-    (absX: number, absY: number): boolean => {
-      const dx = absX - plantZone.x;
-      const dy = absY - plantZone.y;
-      return Math.sqrt(dx * dx + dy * dy) < plantZone.radius;
-    },
-    [plantZone],
-  );
+  const isNearPlant = (absX: number, absY: number): boolean => {
+    const { x, y, radius } = plantZoneRef.current;
+    const dx = absX - x;
+    const dy = absY - y;
+    return Math.sqrt(dx * dx + dy * dy) < radius;
+  };
 
   const panResponder = useRef(
     PanResponder.create({
@@ -195,20 +278,19 @@ function WaterButton({
       onPanResponderMove: (_, gs) => {
         (pan.x as any).setValue(gs.dx);
         (pan.y as any).setValue(gs.dy);
-        const near = checkNearPlant(
+        setIsRaining(isNearPlant(
           btnAbsPos.current.x + gs.dx,
           btnAbsPos.current.y + gs.dy,
-        );
-        setIsRaining(near);
+        ));
       },
       onPanResponderRelease: (_, gs) => {
         pan.flattenOffset();
-        const near = checkNearPlant(
+        const near = isNearPlant(
           btnAbsPos.current.x + gs.dx,
           btnAbsPos.current.y + gs.dy,
         );
         setIsRaining(false);
-        if (near) { setWatered(true); onWater(); }
+        if (near) { setWatered(true); onWaterRef.current(); }
         Animated.spring(pan, {
           toValue: { x: 0, y: 0 },
           useNativeDriver: false,
@@ -856,6 +938,7 @@ export function LazosListScreen() {
 
   const [lazos, setLazos] = useState<Lazo[]>([]);
   const [activeLazo, setActiveLazo] = useState<Lazo | null>(null);
+  const [celebrateKey, setCelebrateKey] = useState(0);
 
   const [plantZone, setPlantZone] = useState(PLANT_ZONE);
   const cardRef = useRef<View>(null);
@@ -903,6 +986,7 @@ export function LazosListScreen() {
         : l;
       setLazos(prev => prev.map(updater));
       setActiveLazo(prev => prev ? updater(prev) : prev);
+      if (result.justStreaked) { setCelebrateKey(k => k + 1); }
     } catch (err: any) {
       Alert.alert('Error', err.message ?? 'No se pudo regar');
     }
@@ -952,10 +1036,11 @@ export function LazosListScreen() {
               </View>
             )}
 
-            {/* Emoji de fase */}
-            <Text style={{ fontSize: 64 }}>
-              {activeLazo ? (PHASE_EMOJI[activeLazo.plantPhase] ?? '🌱') : '🌱'}
-            </Text>
+            {/* Planta SVG animada */}
+            <AnimatedPlant
+              phase={activeLazo?.plantPhase ?? 'seed'}
+              celebrateKey={celebrateKey}
+            />
 
             <Text style={styles.levelText}>
               {activeLazo ? PHASE_LABEL[activeLazo.plantPhase] ?? activeLazo.plantPhase : 'Sin lazos'}
@@ -965,29 +1050,14 @@ export function LazosListScreen() {
               <Text style={styles.streakLabel}> días de racha</Text>
             </View>
 
-            {/* Indicadores de riego */}
+            {/* Indicadores de riego animados */}
             {activeLazo && (
               <View style={styles.wateringRow}>
-                <View style={styles.wateringItem}>
-                  <View style={[styles.wateringCircle, activeLazo.iWateredToday && styles.wateringCircleActive]}>
-                    <Icon
-                      name={activeLazo.iWateredToday ? 'water' : 'water-outline'}
-                      size={15}
-                      color={activeLazo.iWateredToday ? '#FFF' : C.textLight}
-                    />
-                  </View>
-                  <Text style={styles.wateringLabel}>Tú</Text>
-                </View>
-                <View style={styles.wateringItem}>
-                  <View style={[styles.wateringCircle, activeLazo.partnerWateredToday && styles.wateringCircleActive]}>
-                    <Icon
-                      name={activeLazo.partnerWateredToday ? 'water' : 'water-outline'}
-                      size={15}
-                      color={activeLazo.partnerWateredToday ? '#FFF' : C.textLight}
-                    />
-                  </View>
-                  <Text style={styles.wateringLabel}>{activeLazo.partnerUsername.charAt(0).toUpperCase()}</Text>
-                </View>
+                <WateringIndicator active={activeLazo.iWateredToday} label="Tú" />
+                <WateringIndicator
+                  active={activeLazo.partnerWateredToday}
+                  label={activeLazo.partnerUsername.charAt(0).toUpperCase()}
+                />
               </View>
             )}
           </View>
@@ -1096,22 +1166,50 @@ const styles = StyleSheet.create({
   },
   warningText: { fontSize: 12, color: '#856404', fontWeight: '500' },
   wateringRow: {
-    flexDirection: 'row', gap: 20, marginTop: 14,
+    flexDirection: 'row', gap: 24, marginTop: 14,
   },
   wateringItem: {
-    alignItems: 'center', gap: 4,
+    alignItems: 'center', gap: 5,
   },
   wateringCircle: {
-    width: 36, height: 36, borderRadius: 18,
+    width: INDICATOR_SIZE, height: INDICATOR_SIZE,
+    borderRadius: INDICATOR_SIZE / 2,
     borderWidth: 1.5, borderColor: C.textLight,
-    alignItems: 'center', justifyContent: 'center',
+    overflow: 'hidden',
+    backgroundColor: 'rgba(180,210,180,0.12)',
   },
   wateringCircleActive: {
-    backgroundColor: C.green,
     borderColor: C.green,
+  },
+  waterFillContainer: {
+    position: 'absolute',
+    bottom: 0, left: 0, right: 0,
+    height: INDICATOR_SIZE + 14,
+  },
+  waveCap: {
+    position: 'absolute',
+    top: 0,
+    left: -INDICATOR_SIZE,
+    width: INDICATOR_SIZE * 3,
+    height: 16,
+    borderRadius: 8,
+  },
+  waveCap1: { backgroundColor: C.green, opacity: 0.95 },
+  waveCap2: { backgroundColor: C.greenLight, opacity: 0.6, top: 3 },
+  waterBody: {
+    position: 'absolute',
+    top: 8, left: 0, right: 0, bottom: 0,
+    backgroundColor: C.green,
+  },
+  waterIconOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    alignItems: 'center', justifyContent: 'center',
   },
   wateringLabel: {
     fontSize: 11, color: C.textLight, fontWeight: '500',
+  },
+  wateringLabelActive: {
+    color: C.greenDark,
   },
 
   // ── Chat ──
