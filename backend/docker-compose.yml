@@ -21,7 +21,6 @@ services:
       DATABASE_URL: postgresql://lazos:lazos_secret@db:5432/lazos
       JWT_SECRET: cambia_esto_por_algo_seguro
       PORT: 3000
-      FIREBASE_SERVICE_ACCOUNT_PATH: ./lazos-1bdec-firebase-adminsdk-fbsvc-f00896c9b6.json
     ports:
       - "3000:3000"
     depends_on:

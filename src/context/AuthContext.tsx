@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { DeviceEventEmitter } from 'react-native';
 import { getToken, getSavedUser } from '../services/authStorage';
 import {
   login as loginService,
@@ -43,7 +44,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Escuchar rotación de token mientras la sesión esté activa
     const unsubscribeRefresh = listenForTokenRefresh();
-    return unsubscribeRefresh;
+
+    // Forzar logout si el refresh token también expiró
+    const unsubscribeExpired = DeviceEventEmitter.addListener('auth:sessionExpired', () => {
+      setUser(null);
+    });
+
+    return () => {
+      unsubscribeRefresh();
+      unsubscribeExpired.remove();
+    };
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {

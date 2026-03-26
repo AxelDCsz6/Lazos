@@ -78,3 +78,5 @@ android/app/google-services.json
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+android/gradle.properties
+android/app/lazos-release.keystore

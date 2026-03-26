@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Permite tráfico HTTP (sin TLS) al servidor de producción.
+  En el resto de dominios se aplica la política por defecto (HTTPS requerido).
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">187.173.233.24</domain>
+    </domain-config>
+</network-security-config>
