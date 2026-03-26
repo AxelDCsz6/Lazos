@@ -1,32 +1,37 @@
-import { Platform } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
 import messaging from '@react-native-firebase/messaging';
-import api from './api';
+import { api } from './api';
 
 // ─── Solicitar permiso y registrar token FCM ───────────────────
 export async function registerForPushNotifications(): Promise<void> {
   try {
-    // En iOS hay que pedir permiso explícito; en Android 13+ también
-    const authStatus = await messaging().requestPermission();
-    const enabled =
-      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-
-    if (!enabled) {
-      console.log('[notifications] Permisos de notificación denegados');
-      return;
+    // Android 13+ (API 33) requiere permiso en tiempo de ejecución
+    if (Platform.OS === 'android' && Platform.Version >= 33) {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        console.log('[notifications] Permiso POST_NOTIFICATIONS denegado');
+        return;
+      }
+    } else if (Platform.OS === 'ios') {
+      const authStatus = await messaging().requestPermission();
+      const enabled =
+        authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+        authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+      if (!enabled) {
+        console.log('[notifications] Permisos iOS denegados');
+        return;
+      }
     }
 
-    // En Android debemos asegurarnos que el token esté disponible
-    if (Platform.OS === 'android') {
-      await messaging().registerDeviceForRemoteMessages();
-    }
+    await messaging().registerDeviceForRemoteMessages();
 
     const token = await messaging().getToken();
     if (!token) { return; }
 
-    // Enviar token al backend
     await api.put('/auth/fcm-token', { token });
-    console.log('[notifications] FCM token registrado');
+    console.log('[notifications] FCM token registrado:', token.slice(0, 20) + '...');
   } catch (err) {
     console.error('[notifications] Error registrando FCM token:', err);
   }

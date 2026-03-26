@@ -1,4 +1,5 @@
 import admin from 'firebase-admin';
+import path from 'path';
 import { db } from '../config/database';
 
 // ─── Inicializar Firebase Admin (una sola vez) ─────────────────
@@ -9,8 +10,12 @@ function initFirebase(): void {
   try {
     const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH
       || './firebase-service-account.json';
+    // Resolve relative to the backend root (process.cwd()) not this file's dir
+    const resolvedPath = path.isAbsolute(serviceAccountPath)
+      ? serviceAccountPath
+      : path.resolve(process.cwd(), serviceAccountPath);
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const serviceAccount = require(serviceAccountPath);
+    const serviceAccount = require(resolvedPath);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
@@ -21,8 +26,6 @@ function initFirebase(): void {
   }
 }
 
-initFirebase();
-
 // ─── Envío genérico ────────────────────────────────────────────
 async function sendToToken(
   token: string,
@@ -30,6 +33,7 @@ async function sendToToken(
   body: string,
   data?: Record<string, string>,
 ): Promise<void> {
+  initFirebase();
   if (!initialized) { return; }
   try {
     await admin.messaging().send({
@@ -64,7 +68,7 @@ export async function notifyNewMessage(
   try {
     // Obtener el FCM token del compañero
     const result = await db.query(
-      `SELECT u.fcm_token, u.username as sender_username
+      `SELECT u.fcm_token, sender.username as sender_username
        FROM lazos l
        JOIN users u ON u.id = CASE WHEN l.user1_id = $2 THEN l.user2_id ELSE l.user1_id END
        JOIN users sender ON sender.id = $2
@@ -98,7 +102,7 @@ export async function notifyWatering(
 ): Promise<void> {
   try {
     const result = await db.query(
-      `SELECT u.fcm_token, u.username as sender_username
+      `SELECT u.fcm_token, sender.username as sender_username
        FROM lazos l
        JOIN users u ON u.id = CASE WHEN l.user1_id = $2 THEN l.user2_id ELSE l.user1_id END
        JOIN users sender ON sender.id = $2

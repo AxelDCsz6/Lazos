@@ -49,13 +49,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     const { user: loggedUser } = await loginService(username, password);
     setUser(loggedUser);
-    registerForPushNotifications().catch(() => {});
+    // Pequeño delay para que la UI esté montada antes de mostrar el diálogo
+    setTimeout(() => { registerForPushNotifications().catch(() => {}); }, 1000);
   }, []);
 
   const register = useCallback(async (username: string, password: string) => {
     const { user: newUser } = await registerService(username, password);
     setUser(newUser);
-    registerForPushNotifications().catch(() => {});
+    setTimeout(() => { registerForPushNotifications().catch(() => {}); }, 1000);
   }, []);
 
   const logout = useCallback(async () => {

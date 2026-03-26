@@ -1,6 +1,9 @@
 package com.lazos
 
 import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.os.Build
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
@@ -23,5 +26,21 @@ class MainApplication : Application(), ReactApplication {
   override fun onCreate() {
     super.onCreate()
     loadReactNative(this)
+    createNotificationChannels()
+  }
+
+  private fun createNotificationChannels() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      val channel = NotificationChannel(
+        "lazos_default",
+        "Lazos",
+        NotificationManager.IMPORTANCE_HIGH,
+      ).apply {
+        description = "Mensajes y actualizaciones de tus lazos"
+        enableVibration(true)
+      }
+      val manager = getSystemService(NotificationManager::class.java)
+      manager.createNotificationChannel(channel)
+    }
   }
 }
