@@ -1,5 +1,5 @@
 // ─── API ──────────────────────────────────────────────────────────────────────
-export const API_BASE_URL = 'http://187.173.233.24:3000/api'; 
+export const API_BASE_URL = 'https://lazos.axeldchosting.org/api';
 
 export const API_TIMEOUT = 10000; // 10s
 
