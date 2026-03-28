@@ -10,6 +10,9 @@ interface AuthResponse {
 
 export async function login(username: string, password: string): Promise<AuthResponse> {
   const { data } = await api.post<AuthResponse>('/auth/login', { username, password });
+  if (!data.token || !data.refreshToken || !data.user) {
+    throw new Error('Respuesta inesperada del servidor');
+  }
   await saveToken(data.token);
   await saveRefreshToken(data.refreshToken);
   await saveUser(data.user);
@@ -18,6 +21,9 @@ export async function login(username: string, password: string): Promise<AuthRes
 
 export async function register(username: string, password: string): Promise<AuthResponse> {
   const { data } = await api.post<AuthResponse>('/auth/register', { username, password });
+  if (!data.token || !data.refreshToken || !data.user) {
+    throw new Error('Respuesta inesperada del servidor');
+  }
   await saveToken(data.token);
   await saveRefreshToken(data.refreshToken);
   await saveUser(data.user);

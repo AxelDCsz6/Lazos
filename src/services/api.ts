@@ -66,6 +66,7 @@ api.interceptors.response.use(
         const { data } = await axios.post(`${API_BASE_URL}/auth/refresh`, { refreshToken });
         const newToken: string = data.token;
 
+        if (!newToken) { throw new Error('no_token'); }
         await saveToken(newToken);
         flushQueue(newToken);
 
