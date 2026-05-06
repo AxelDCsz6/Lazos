@@ -43,15 +43,26 @@ CREATE TABLE daily_watering (
 
 -- ─── MENSAJES ────────────────────────────────────────────────
 CREATE TABLE messages (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  lazo_id      UUID        NOT NULL REFERENCES lazos(id) ON DELETE CASCADE,
+  sender_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  content      TEXT        NOT NULL,
+  type         VARCHAR(10) NOT NULL DEFAULT 'text'
+               CHECK (type IN ('text', 'photo')),
+  status       VARCHAR(10) NOT NULL DEFAULT 'sent'
+               CHECK (status IN ('sent', 'delivered')),
+  reply_to_id  UUID        REFERENCES messages(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ─── REACCIONES ──────────────────────────────────────────────
+CREATE TABLE reactions (
   id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  lazo_id    UUID        NOT NULL REFERENCES lazos(id) ON DELETE CASCADE,
-  sender_id  UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  content    TEXT        NOT NULL,
-  type       VARCHAR(10) NOT NULL DEFAULT 'text'
-             CHECK (type IN ('text', 'photo')),
-  status     VARCHAR(10) NOT NULL DEFAULT 'sent'
-             CHECK (status IN ('sent', 'delivered')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  message_id UUID        NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type       VARCHAR(20) NOT NULL DEFAULT 'heart',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT unique_reaction UNIQUE (message_id, user_id, type)
 );
 
 -- ─── CÓDIGOS DE INVITACIÓN ───────────────────────────────────
@@ -70,6 +81,7 @@ CREATE INDEX idx_lazos_user2          ON lazos(user2_id);
 CREATE INDEX idx_messages_lazo        ON messages(lazo_id, created_at DESC);
 CREATE INDEX idx_daily_watering_lazo  ON daily_watering(lazo_id, watered_on);
 CREATE INDEX idx_invite_codes_active  ON invite_codes(code) WHERE used = FALSE;
+CREATE INDEX idx_reactions_message    ON reactions(message_id);
 
 -- ─── TRIGGER updated_at ──────────────────────────────────────
 CREATE OR REPLACE FUNCTION update_updated_at()

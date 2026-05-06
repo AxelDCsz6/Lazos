@@ -30,6 +30,11 @@ export type PlantPhase = 'seed' | 'sprout' | 'small' | 'big' | 'flower';
 export type MessageStatus = 'pending' | 'sent' | 'delivered';
 export type MessageType = 'text' | 'photo';
 
+export interface MessageReaction {
+  userId: string;
+  type: string;
+}
+
 export interface Message {
   id: string;
   lazoId: string;
@@ -38,6 +43,10 @@ export interface Message {
   type: MessageType;
   status: MessageStatus;
   createdAt: string;
+  replyToId?: string;
+  replyContent?: string;
+  replySenderId?: string;
+  reactions?: MessageReaction[];
 }
 
 // ─── Planta ───────────────────────────────────────────────────────────────────

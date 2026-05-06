@@ -1,5 +1,5 @@
 import { api } from './api';
-import { Message } from '../types';
+import { Message, MessageReaction } from '../types';
 
 function mapMessage(m: any): Message {
   return {
@@ -10,6 +10,12 @@ function mapMessage(m: any): Message {
     type: m.type,
     status: m.status,
     createdAt: m.created_at,
+    replyToId: m.reply_to_id ?? undefined,
+    replyContent: m.reply_content ?? undefined,
+    replySenderId: m.reply_sender_id ?? undefined,
+    reactions: Array.isArray(m.reactions)
+      ? (m.reactions as any[]).map(r => ({ userId: r.userId ?? r.user_id, type: r.type }))
+      : [],
   };
 }
 
@@ -18,7 +24,26 @@ export async function getMessages(lazoId: string, page: number): Promise<Message
   return (res.data.messages as any[]).map(mapMessage);
 }
 
-export async function sendMessage(lazoId: string, content: string): Promise<Message> {
-  const res = await api.post(`/lazos/${lazoId}/messages`, { content });
+export async function sendMessage(
+  lazoId: string,
+  content: string,
+  replyToId?: string,
+): Promise<Message> {
+  const res = await api.post(`/lazos/${lazoId}/messages`, {
+    content,
+    ...(replyToId ? { reply_to_id: replyToId } : {}),
+  });
   return mapMessage(res.data.message);
+}
+
+export async function toggleReaction(
+  lazoId: string,
+  messageId: string,
+  type = 'heart',
+): Promise<MessageReaction[]> {
+  const res = await api.post(`/lazos/${lazoId}/messages/${messageId}/react`, { type });
+  return (res.data.reactions as any[]).map(r => ({
+    userId: r.userId ?? r.user_id,
+    type: r.type,
+  }));
 }

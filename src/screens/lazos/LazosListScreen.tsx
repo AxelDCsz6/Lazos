@@ -17,13 +17,16 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Swipeable, FlatList as GHFlatList, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useAuth } from '../../hooks/useAuth';
 import { LazosModal } from '../../components/LazosModal';
 import { AnimatedPlant } from '../../components/AnimatedPlant';
+import { ChatInput } from '../../components/ChatInput';
 import { fetchLazos, waterLazo as waterLazoApi } from '../../services/lazosService';
 import {
   getMessages as fetchMessages,
   sendMessage as apiSendMessage,
+  toggleReaction as apiToggleReaction,
 } from '../../services/messages';
 import { Message } from '../../types';
 
@@ -398,6 +401,43 @@ function WaterButton({
 // ─── Chat con slide a pantalla completa ───────────────────────
 const CHAT_HALF_HEIGHT = SH * 0.52; // altura visible en modo medio
 
+const ChatHeader = React.memo(function ChatHeader({
+  partnerUsername,
+  isFullscreen,
+  onClose,
+  onToggleFullscreen,
+  panHandlers,
+}: {
+  partnerUsername: string;
+  isFullscreen: boolean;
+  onClose: () => void;
+  onToggleFullscreen: () => void;
+  panHandlers: object;
+}) {
+  return (
+    <SafeAreaView edges={['top']} style={{ backgroundColor: C.green }}>
+      <View style={styles.chatHeader} {...panHandlers}>
+        <View style={styles.chatHeaderRow}>
+          <TouchableOpacity onPress={onClose} style={styles.chatClose}>
+            <Icon name="close" size={20} color="#FFF" />
+          </TouchableOpacity>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.chatTitle}>{partnerUsername}</Text>
+            <Text style={styles.chatSubtitle}>En línea</Text>
+          </View>
+          <TouchableOpacity onPress={onToggleFullscreen} style={styles.chatExpandBtn}>
+            <Icon
+              name={isFullscreen ? 'chevron-down' : 'chevron-up'}
+              size={22}
+              color="#FFF"
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+});
+
 function ChatModal({
   visible,
   onClose,
@@ -419,11 +459,16 @@ function ChatModal({
   // ── Chat state ──
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMore, setHasMore] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [inputText, setInputText] = useState('');
+  const [replyTarget, setReplyTarget] = useState<Message | null>(null);
   const pageRef = useRef(1);
   const loadingMoreRef = useRef(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const flatListRef = useRef<any>(null);
+  const idToIndexRef = useRef<Map<string, number>>(new Map());
+  // Heart animation: messageId -> Animated.Value
+  const heartAnims = useRef<Map<string, Animated.Value>>(new Map()).current;
+  // Double-tap timestamps: messageId -> last tap ms
+  const tapTimestamps = useRef<Map<string, number>>(new Map()).current;
 
   // ── Fetch helpers ──
   const loadPage = useCallback(
@@ -449,7 +494,6 @@ function ChatModal({
   useEffect(() => {
     if (!visible || !lazo) { return; }
 
-    setMessages([]);
     setHasMore(true);
     pageRef.current = 1;
     loadingMoreRef.current = false;
@@ -461,10 +505,21 @@ function ChatModal({
         const fresh = await fetchMessages(lazo.id, 1);
         setMessages(prev => {
           if (fresh.length === 0) { return prev; }
+          const freshMap = new Map(fresh.map(m => [m.id, m]));
+          // Update reactions on existing messages + add new ones
+          let changed = false;
+          const updated = prev.map(m => {
+            const freshMsg = freshMap.get(m.id);
+            if (freshMsg && JSON.stringify(freshMsg.reactions) !== JSON.stringify(m.reactions)) {
+              changed = true;
+              return { ...m, reactions: freshMsg.reactions };
+            }
+            return m;
+          });
           const existingIds = new Set(prev.map(m => m.id));
           const newOnes = fresh.filter(m => !existingIds.has(m.id));
-          if (newOnes.length === 0) { return prev; }
-          return [...newOnes, ...prev];
+          if (newOnes.length === 0 && !changed) { return prev; }
+          return [...newOnes, ...updated];
         });
       } catch {
         // silent
@@ -488,12 +543,18 @@ function ChatModal({
     loadPage(nextPage).finally(() => { loadingMoreRef.current = false; });
   }, [hasMore, lazo, loadPage]);
 
+  // ── Build id→index map for scroll-to-reply ──
+  useEffect(() => {
+    const map = new Map<string, number>();
+    messages.forEach((m, i) => map.set(m.id, i));
+    idToIndexRef.current = map;
+  }, [messages]);
+
   // ── Send message ──
-  const handleSend = useCallback(async () => {
-    if (!lazo || !inputText.trim() || sending) { return; }
-    const text = inputText.trim();
-    setInputText('');
-    setSending(true);
+  const handleSend = useCallback(async (text: string) => {
+    if (!lazo) { return; }
+    const replyId = replyTarget?.id;
+    setReplyTarget(null);
     const tempId = `temp-${Date.now()}`;
     const optimistic: Message = {
       id: tempId,
@@ -503,13 +564,16 @@ function ChatModal({
       type: 'text',
       status: 'pending',
       createdAt: new Date().toISOString(),
+      replyToId: replyId,
+      replyContent: replyTarget?.content,
+      replySenderId: replyTarget?.senderId,
+      reactions: [],
     };
     setMessages(prev => [optimistic, ...prev]);
     try {
-      const sent = await apiSendMessage(lazo.id, text);
+      const sent = await apiSendMessage(lazo.id, text, replyId);
       setMessages(prev => {
         const mapped = prev.map(m => (m.id === tempId ? sent : m));
-        // Deduplicate in case polling already added it
         const seen = new Set<string>();
         return mapped.filter(m => {
           if (seen.has(m.id)) { return false; }
@@ -520,10 +584,44 @@ function ChatModal({
     } catch (err: any) {
       setMessages(prev => prev.filter(m => m.id !== tempId));
       Alert.alert('Error', err.message ?? 'No se pudo enviar el mensaje');
-    } finally {
-      setSending(false);
     }
-  }, [lazo, inputText, sending, user?.id]);
+  }, [lazo, replyTarget, user?.id]);
+
+  // ── Toggle heart reaction ──
+  const handleReact = useCallback(async (msg: Message) => {
+    if (!lazo) { return; }
+    // Optimistic update
+    const userId = user?.id ?? '';
+    const alreadyReacted = (msg.reactions ?? []).some(r => r.userId === userId && r.type === 'heart');
+    setMessages(prev => prev.map(m => {
+      if (m.id !== msg.id) { return m; }
+      const newReactions = alreadyReacted
+        ? (m.reactions ?? []).filter(r => !(r.userId === userId && r.type === 'heart'))
+        : [...(m.reactions ?? []), { userId, type: 'heart' }];
+      return { ...m, reactions: newReactions };
+    }));
+
+    // Animate heart
+    if (!alreadyReacted) {
+      if (!heartAnims.has(msg.id)) {
+        heartAnims.set(msg.id, new Animated.Value(0));
+      }
+      const anim = heartAnims.get(msg.id)!;
+      anim.setValue(0);
+      Animated.sequence([
+        Animated.spring(anim, { toValue: 1, useNativeDriver: true, tension: 200, friction: 5 }),
+        Animated.timing(anim, { toValue: 0, duration: 600, delay: 400, useNativeDriver: true }),
+      ]).start();
+    }
+
+    try {
+      const updated = await apiToggleReaction(lazo.id, msg.id);
+      setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, reactions: updated } : m));
+    } catch {
+      // Revert optimistic on error
+      setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, reactions: msg.reactions } : m));
+    }
+  }, [lazo, user?.id, heartAnims]);
 
   const formatTime = (iso: string) => {
     try {
@@ -548,9 +646,21 @@ function ChatModal({
     [chatFullHeight, containerHeight],
   );
 
+  const handleToggleFullscreen = useCallback(() => {
+    snapTo(isFullscreen ? CHAT_HALF_HEIGHT : chatFullHeight);
+  }, [snapTo, isFullscreen, chatFullHeight]);
+
+  const handleFocusExpand = useCallback(() => {
+    if (!isFullscreen) {
+      // Expandir inmediatamente sin animar para evitar flicker por recalculo de layout
+      currentSnap.current = chatFullHeight;
+      setIsFullscreen(true);
+      containerHeight.setValue(chatFullHeight);
+    }
+  }, [isFullscreen, chatFullHeight, containerHeight]);
+
   const handleOpen = useCallback(() => {
     currentSnap.current = CHAT_HALF_HEIGHT;
-    setIsFullscreen(false);
     containerHeight.setValue(CHAT_HALF_HEIGHT);
   }, [containerHeight]);
 
@@ -598,6 +708,7 @@ function ChatModal({
       transparent
       onRequestClose={handleClose}
       onShow={handleOpen}>
+      <GestureHandlerRootView style={StyleSheet.absoluteFill}>
       <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
         <TouchableOpacity
           style={[StyleSheet.absoluteFill, { backgroundColor: C.overlay }]}
@@ -618,85 +729,131 @@ function ChatModal({
           <View style={[styles.chatInner, { height: chatFullHeight }]}>
 
             {/* Header completo — visible solo en pantalla completa */}
-            <SafeAreaView edges={['top']} style={{ backgroundColor: C.green }}>
-            <View style={styles.chatHeader} {...headerPan.panHandlers}>
-              <View style={styles.chatHeaderRow}>
-                <TouchableOpacity onPress={handleClose} style={styles.chatClose}>
-                  <Icon name="close" size={20} color="#FFF" />
-                </TouchableOpacity>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.chatTitle}>{lazo?.partnerUsername ?? '—'}</Text>
-                  <Text style={styles.chatSubtitle}>En línea</Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => snapTo(isFullscreen ? CHAT_HALF_HEIGHT : chatFullHeight)}
-                  style={styles.chatExpandBtn}>
-                  <Icon
-                    name={isFullscreen ? 'chevron-down' : 'chevron-up'}
-                    size={22}
-                    color="#FFF"
-                  />
-                </TouchableOpacity>
-              </View>
-            </View>
-            </SafeAreaView>
+            <ChatHeader
+              partnerUsername={lazo?.partnerUsername ?? '—'}
+              isFullscreen={isFullscreen}
+              onClose={handleClose}
+              onToggleFullscreen={handleToggleFullscreen}
+              panHandlers={headerPan.panHandlers}
+            />
 
             {/* Mensajes */}
-            <FlatList
+            <GHFlatList
+              ref={flatListRef}
               data={messages}
               inverted
               keyExtractor={m => m.id}
               style={{ flex: 1, backgroundColor: C.bg }}
-              contentContainerStyle={{ padding: 16, gap: 12 }}
+              contentContainerStyle={{ padding: 16, paddingBottom: 20 }}
               onEndReached={handleEndReached}
               onEndReachedThreshold={0.3}
+              ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
               renderItem={({ item }) => {
                 const mine = item.senderId === user?.id;
+                const heartCount = (item.reactions ?? []).filter(r => r.type === 'heart').length;
+                const iReacted = (item.reactions ?? []).some(r => r.userId === user?.id && r.type === 'heart');
+                const heartAnim = heartAnims.get(item.id);
+
                 return (
-                  <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
-                    <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}>
-                      {item.content}
-                    </Text>
-                    <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>
-                      {formatTime(item.createdAt)}
-                    </Text>
+                  <View style={{ overflow: 'visible', marginBottom: heartCount > 0 ? 12 : 0 }}>
+                    <Swipeable
+                      renderLeftActions={() => (
+                        <View style={styles.swipeReplyHint}>
+                          <Icon name="reply" size={20} color={C.green} />
+                        </View>
+                      )}
+                      onSwipeableWillOpen={(direction: 'left' | 'right') => {
+                        if (direction === 'left') { setReplyTarget(item); }
+                      }}
+                      overshootFriction={8}
+                      overshootLeft={false}
+                      leftThreshold={60}>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          const now = Date.now();
+                          const last = tapTimestamps.get(item.id) ?? 0;
+                          if (now - last < 300) {
+                            handleReact(item);
+                            tapTimestamps.delete(item.id);
+                          } else {
+                            tapTimestamps.set(item.id, now);
+                          }
+                        }}>
+                        <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
+                          {/* Reply quote */}
+                          {item.replyToId && item.replyContent && (
+                            <TouchableOpacity
+                              style={[styles.replyQuote, mine && styles.replyQuoteMine]}
+                              onPress={() => {
+                                const idx = idToIndexRef.current.get(item.replyToId!);
+                                if (idx !== undefined) {
+                                  flatListRef.current?.scrollToIndex({ index: idx, animated: true });
+                                }
+                              }}>
+                              <Text style={[styles.replyQuoteText, mine && styles.replyQuoteTextMine]} numberOfLines={2}>
+                                {item.replyContent}
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                          <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}>
+                            {item.content}
+                          </Text>
+                          <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>
+                            {formatTime(item.createdAt)}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    </Swipeable>
+                    {/* Heart reaction badge — OUTSIDE Swipeable to avoid clipping */}
+                    {heartCount > 0 && (
+                      <View style={[styles.heartBadge, mine ? styles.heartBadgeMine : styles.heartBadgeOther]}>
+                        <Text style={[styles.heartBadgeText, iReacted && styles.heartBadgeTextActive]}>
+                          {'❤️'} {heartCount > 1 ? heartCount : ''}
+                        </Text>
+                      </View>
+                    )}
+                    {/* Heart animation — OUTSIDE Swipeable to avoid clipping */}
+                    {heartAnim && (
+                      <Animated.View
+                        style={[
+                          styles.heartFloating,
+                          mine ? styles.heartFloatingMine : styles.heartFloatingOther,
+                          {
+                            opacity: heartAnim,
+                            transform: [{ scale: heartAnim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1.4] }) }],
+                          },
+                        ]}
+                        pointerEvents="none">
+                        <Text style={{ fontSize: 28 }}>❤️</Text>
+                      </Animated.View>
+                    )}
                   </View>
                 );
               }}
             />
 
-            {/* Input */}
-            <SafeAreaView edges={['bottom']} style={{ backgroundColor: C.white, paddingBottom: 12 }}>
-              <View style={styles.chatInputRow}>
-                <TouchableOpacity style={styles.chatPlus}>
-                  <Icon name="plus" size={22} color={C.textSoft} />
-                </TouchableOpacity>
-                <TextInput
-                  style={styles.chatInput}
-                  value={inputText}
-                  onChangeText={setInputText}
-                  placeholder="Escribe un mensaje..."
-                  placeholderTextColor={C.textLight}
-                  multiline
-                  maxLength={1000}
-                  onFocus={() => { if (!isFullscreen) { snapTo(chatFullHeight); } }}
-                />
-                <TouchableOpacity
-                  style={styles.chatSend}
-                  onPress={handleSend}
-                  disabled={!inputText.trim() || sending}>
-                  <Icon
-                    name="send"
-                    size={18}
-                    color={inputText.trim() && !sending ? C.green : C.textLight}
-                  />
+            {/* Reply preview */}
+            {replyTarget && (
+              <View style={styles.replyPreview}>
+                <View style={styles.replyPreviewBar} />
+                <Text style={styles.replyPreviewText} numberOfLines={1}>{replyTarget.content}</Text>
+                <TouchableOpacity onPress={() => setReplyTarget(null)} style={styles.replyPreviewClose}>
+                  <Icon name="close" size={18} color={C.textSoft} />
                 </TouchableOpacity>
               </View>
-            </SafeAreaView>
+            )}
+
+            {/* Input (isolated component — no re-render of header on keystroke) */}
+            <ChatInput
+              onSend={handleSend}
+              onFocusExpand={handleFocusExpand}
+            />
 
           </View>
         </Animated.View>
       </View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -1416,6 +1573,7 @@ const styles = StyleSheet.create({
     backgroundColor: C.white,
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.06, shadowRadius: 3, elevation: 1,
+    marginBottom: 2,
   },
   bubbleMine: { backgroundColor: C.green, alignSelf: 'flex-end' },
   bubbleOther: { alignSelf: 'flex-start' },
@@ -1439,6 +1597,60 @@ const styles = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: C.beige, alignItems: 'center', justifyContent: 'center',
   },
+
+  // ── Swipe reply ──
+  swipeReplyHint: {
+    width: 60, alignItems: 'center', justifyContent: 'center',
+    paddingLeft: 12,
+  },
+
+  // ── Reply quote inside bubble ──
+  replyQuote: {
+    borderLeftWidth: 3, borderLeftColor: 'rgba(255,255,255,0.6)',
+    paddingLeft: 8, marginBottom: 6,
+    backgroundColor: 'rgba(0,0,0,0.08)',
+    borderRadius: 6, padding: 6,
+  },
+  replyQuoteMine: {
+    borderLeftColor: 'rgba(255,255,255,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.1)',
+  },
+  replyQuoteText: { fontSize: 12, color: C.textSoft },
+  replyQuoteTextMine: { color: 'rgba(255,255,255,0.85)' },
+
+  // ── Reply preview bar (above input) ──
+  replyPreview: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 16, paddingVertical: 8,
+    backgroundColor: C.beige,
+    borderTopWidth: 1, borderTopColor: C.beige,
+  },
+  replyPreviewBar: {
+    width: 3, height: '100%', borderRadius: 2,
+    backgroundColor: C.green, alignSelf: 'stretch', minHeight: 16,
+  },
+  replyPreviewText: { flex: 1, fontSize: 13, color: C.textSoft },
+  replyPreviewClose: { padding: 4 },
+
+  // ── Heart reaction badge ──
+  heartBadge: {
+    position: 'absolute', bottom: -8,
+    backgroundColor: C.white,
+    borderRadius: 10, paddingHorizontal: 5, paddingVertical: 1,
+    borderWidth: 1, borderColor: C.beige,
+    elevation: 2, zIndex: 10,
+  },
+  heartBadgeMine: { right: 6 },
+  heartBadgeOther: { left: 6 },
+  heartBadgeText: { fontSize: 12 },
+  heartBadgeTextActive: {},
+
+  // ── Heart floating animation ──
+  heartFloating: {
+    position: 'absolute', top: '30%', zIndex: 20,
+  },
+  heartFloatingMine: { right: '30%' },
+  heartFloatingOther: { left: '30%' },
 
   // ── Menú lateral ──
   sideMenu: {
