@@ -14,6 +14,9 @@ import {
   Alert,
   TextInput,
   Switch,
+  DeviceEventEmitter,
+  Image,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -29,6 +32,21 @@ import {
   toggleReaction as apiToggleReaction,
 } from '../../services/messages';
 import { Message } from '../../types';
+import {
+  getAllUnread,
+  clearUnread,
+  formatUnreadBadge,
+  UNREAD_CHANGED,
+} from '../../services/unreadService';
+import { setActiveChatLazo } from '../../services/notificationService';
+import {
+  pickFromCamera,
+  pickFromGallery,
+  uploadMedia,
+  resolveMediaUrl,
+} from '../../services/mediaService';
+import ImageViewing from 'react-native-image-viewing';
+import Video from 'react-native-video';
 
 const { width: SW, height: SH } = Dimensions.get('window');
 
@@ -289,19 +307,21 @@ function WaterButton({
       useNativeDriver: false,
     });
     animRef.current.start(({ finished }) => {
-      if (finished) {
-        completedRef.current = true;
-        setIsRaining(false);
-        setWatered(true);
-        // Volver al origen antes de que disabled=true elimine los panHandlers
-        Animated.spring(pan, {
-          toValue: { x: 0, y: 0 },
-          useNativeDriver: false,
-          tension: 40,
-          friction: 7,
-        }).start(() => setTimeout(() => setWatered(false), 1500));
-        onWaterRef.current();
-      }
+      if (!finished) { return; }
+      completedRef.current = true;
+      isNearRef.current = false;
+      setIsRaining(false);
+      setWatered(true);
+      // Aplanar el offset acumulado para que el spring vaya al origen real,
+      // no a la posición donde el dedo todavía está apoyado.
+      pan.flattenOffset();
+      Animated.spring(pan, {
+        toValue: { x: 0, y: 0 },
+        useNativeDriver: false,
+        tension: 40,
+        friction: 7,
+      }).start(() => setTimeout(() => setWatered(false), 1500));
+      onWaterRef.current();
     });
   };
 
@@ -352,10 +372,13 @@ function WaterButton({
         }
       },
       onPanResponderRelease: () => {
+        // Si el riego ya completó, el callback de completion ya hizo flattenOffset
+        // y disparó el spring de retorno. Salir para no duplicar animaciones.
+        if (completedRef.current) { return; }
         pan.flattenOffset();
         isNearRef.current = false;
         setIsRaining(false);
-        if (!completedRef.current) { resetFill(); }
+        resetFill();
         returnToOrigin();
       },
       onPanResponderTerminate: () => {
@@ -491,6 +514,17 @@ function ChatModal({
     [lazo],
   );
 
+  // ── Marcar chat activo y limpiar contador de no leídos al abrir ──
+  useEffect(() => {
+    if (visible && lazo) {
+      setActiveChatLazo(lazo.id);
+      clearUnread(lazo.id).catch(() => {});
+    } else {
+      setActiveChatLazo(null);
+    }
+    return () => { setActiveChatLazo(null); };
+  }, [visible, lazo]);
+
   // ── Start/stop polling when visible changes ──
   useEffect(() => {
     if (!visible || !lazo) { return; }
@@ -587,6 +621,52 @@ function ChatModal({
       Alert.alert('Error', err.message ?? 'No se pudo enviar el mensaje');
     }
   }, [lazo, replyTarget, user?.id]);
+
+  // ── Visor fullscreen de media ──
+  // Para fotos usamos react-native-image-viewing (pinch zoom incluido).
+  // Para video, un modal propio con react-native-video.
+  const [photoViewerUri, setPhotoViewerUri] = useState<string | null>(null);
+  const [videoViewerUri, setVideoViewerUri] = useState<string | null>(null);
+
+  // ── Envío de media (foto/video) ──
+  const handlePickMedia = useCallback(async (source: 'camera' | 'gallery') => {
+    if (!lazo) { return; }
+    const asset = source === 'camera' ? await pickFromCamera() : await pickFromGallery();
+    if (!asset || !asset.uri) { return; }
+
+    const isVideo = (asset.type ?? '').startsWith('video/');
+    const replyId = replyTarget?.id;
+    setReplyTarget(null);
+    const tempId = `temp-${Date.now()}`;
+    const optimistic: Message = {
+      id: tempId,
+      lazoId: lazo.id,
+      senderId: user?.id ?? '',
+      content: '',
+      type: isVideo ? 'video' : 'photo',
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      replyToId: replyId,
+      replyContent: replyTarget?.content,
+      replySenderId: replyTarget?.senderId,
+      reactions: [],
+      mediaUrl: asset.uri,
+      mediaMime: asset.type,
+      mediaWidth: asset.width,
+      mediaHeight: asset.height,
+    };
+    setMessages(prev => [optimistic, ...prev]);
+    try {
+      const sent = await uploadMedia(lazo.id, asset, replyId);
+      setMessages(prev => prev.map(m => (m.id === tempId ? sent : m)));
+    } catch (err: any) {
+      setMessages(prev => prev.filter(m => m.id !== tempId));
+      Alert.alert('Error', err.message ?? 'No se pudo subir el archivo');
+    }
+  }, [lazo, replyTarget, user?.id]);
+
+  const handlePickCamera  = useCallback(() => { handlePickMedia('camera'); },  [handlePickMedia]);
+  const handlePickGallery = useCallback(() => { handlePickMedia('gallery'); }, [handlePickMedia]);
 
   // ── Toggle heart reaction ──
   const handleReact = useCallback(async (msg: Message) => {
@@ -788,7 +868,11 @@ function ChatModal({
                             tapTimestamps.set(item.id, now);
                           }
                         }}>
-                        <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
+                        <View style={[
+                          styles.bubble,
+                          mine ? styles.bubbleMine : styles.bubbleOther,
+                          (item.type === 'photo' || item.type === 'video') && styles.bubbleMedia,
+                        ]}>
                           {/* Reply quote */}
                           {item.replyToId && item.replyContent && (
                             <TouchableOpacity
@@ -804,9 +888,58 @@ function ChatModal({
                               </Text>
                             </TouchableOpacity>
                           )}
-                          <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}>
-                            {item.content}
-                          </Text>
+                          {item.type === 'photo' && item.mediaUrl && (
+                            <TouchableOpacity
+                              activeOpacity={0.9}
+                              onPress={() => {
+                                const uri = resolveMediaUrl(item.mediaUrl);
+                                if (uri) { setPhotoViewerUri(uri); }
+                              }}>
+                              <Image
+                                source={{ uri: resolveMediaUrl(item.mediaUrl) }}
+                                style={[
+                                  styles.mediaImage,
+                                  item.mediaWidth && item.mediaHeight
+                                    ? { aspectRatio: item.mediaWidth / item.mediaHeight }
+                                    : null,
+                                ]}
+                                resizeMode="cover"
+                              />
+                              {item.status === 'pending' && (
+                                <View style={styles.mediaOverlay}>
+                                  <ActivityIndicator color="#FFF" />
+                                </View>
+                              )}
+                            </TouchableOpacity>
+                          )}
+                          {item.type === 'video' && item.mediaUrl && (
+                            <TouchableOpacity
+                              activeOpacity={0.9}
+                              onPress={() => {
+                                const uri = resolveMediaUrl(item.mediaUrl);
+                                if (uri) { setVideoViewerUri(uri); }
+                              }}>
+                              <View style={[
+                                styles.mediaImage,
+                                item.mediaWidth && item.mediaHeight
+                                  ? { aspectRatio: item.mediaWidth / item.mediaHeight }
+                                  : { aspectRatio: 16 / 9 },
+                                styles.videoThumb,
+                              ]}>
+                                <Icon name="play-circle" size={56} color="rgba(255,255,255,0.95)" />
+                              </View>
+                              {item.status === 'pending' && (
+                                <View style={styles.mediaOverlay}>
+                                  <ActivityIndicator color="#FFF" />
+                                </View>
+                              )}
+                            </TouchableOpacity>
+                          )}
+                          {item.type === 'text' && (
+                            <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}>
+                              {item.content}
+                            </Text>
+                          )}
                           <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>
                             {formatTime(item.createdAt)}
                           </Text>
@@ -856,12 +989,47 @@ function ChatModal({
             <ChatInput
               onSend={handleSend}
               onFocusExpand={handleFocusExpand}
+              onPickFromCamera={handlePickCamera}
+              onPickFromGallery={handlePickGallery}
             />
 
           </View>
         </Animated.View>
       </View>
       </GestureHandlerRootView>
+
+      {/* Visor fullscreen de foto (pinch zoom) */}
+      <ImageViewing
+        images={photoViewerUri ? [{ uri: photoViewerUri }] : []}
+        imageIndex={0}
+        visible={!!photoViewerUri}
+        onRequestClose={() => setPhotoViewerUri(null)}
+        backgroundColor="#000"
+      />
+
+      {/* Visor fullscreen de video */}
+      <Modal
+        visible={!!videoViewerUri}
+        animationType="fade"
+        transparent={false}
+        onRequestClose={() => setVideoViewerUri(null)}>
+        <View style={styles.videoViewer}>
+          {videoViewerUri && (
+            <Video
+              source={{ uri: videoViewerUri }}
+              style={StyleSheet.absoluteFill}
+              controls
+              resizeMode="contain"
+              onEnd={() => setVideoViewerUri(null)}
+            />
+          )}
+          <TouchableOpacity
+            style={styles.videoViewerClose}
+            onPress={() => setVideoViewerUri(null)}>
+            <Icon name="close" size={28} color="#FFF" />
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </Modal>
   );
 }
@@ -897,6 +1065,24 @@ function SideMenu({
   useEffect(() => {
     setLocalLazos(lazos);
   }, [lazos]);
+
+  // ── Badges de no leídos ──
+  const [unreadMap, setUnreadMap] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let mounted = true;
+    getAllUnread().then(m => { if (mounted) { setUnreadMap(m); } });
+    const sub = DeviceEventEmitter.addListener(
+      UNREAD_CHANGED,
+      ({ lazoId, count }: { lazoId: string; count: number }) => {
+        setUnreadMap(prev => {
+          const next = { ...prev };
+          if (count <= 0) { delete next[lazoId]; } else { next[lazoId] = count; }
+          return next;
+        });
+      },
+    );
+    return () => { mounted = false; sub.remove(); };
+  }, []);
 
   // ── Handlers ──
   const handleDelete = (lazo: Lazo) => {
@@ -982,7 +1168,9 @@ function SideMenu({
                 data={localLazos}
                 keyExtractor={i => i.id}
                 contentContainerStyle={{ paddingHorizontal: 16 }}
-                renderItem={({ item }) => (
+                renderItem={({ item }) => {
+                  const unread = unreadMap[item.id] ?? 0;
+                  return (
                   <TouchableOpacity
                     style={styles.lazoItem}
                     onPress={editMode ? undefined : () => { onSelectLazo(item); onClose(); }}
@@ -998,6 +1186,12 @@ function SideMenu({
                         </TouchableOpacity>
                       ) : (
                         <Icon name="leaf" size={17} color={C.green} />
+                      )}
+                      {/* Badge de no leídos: aparece por encima del icono del lazo */}
+                      {!editMode && unread > 0 && (
+                        <View style={styles.unreadBadge}>
+                          <Text style={styles.unreadBadgeText}>{formatUnreadBadge(unread)}</Text>
+                        </View>
                       )}
                     </View>
 
@@ -1020,7 +1214,8 @@ function SideMenu({
                       </View>
                     )}
                   </TouchableOpacity>
-                )}
+                  );
+                }}
               />
 
               {/* Botón crear lazo */}
@@ -1230,6 +1425,27 @@ function SettingsModal({ visible, onClose }: { visible: boolean; onClose: () => 
               thumbColor="#FFF"
             />
           </View>
+
+          <TouchableOpacity
+            style={styles.settingsItem}
+            onPress={async () => {
+              try {
+                const { sendTestNotification } = await import('../../services/notificationsApi');
+                const { tokenPreview } = await sendTestNotification();
+                Alert.alert('Notificación enviada', `Token: ${tokenPreview}\nDeberías verla en segundos.`);
+              } catch (e: any) {
+                Alert.alert('Error', e?.message ?? 'No se pudo enviar la notificación de prueba');
+              }
+            }}>
+            <View style={styles.settingsIconWrap}>
+              <Icon name="bell-ring-outline" size={22} color={C.greenDark} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingsTitle}>Probar notificación</Text>
+              <Text style={styles.settingsSub}>Envía una notificación de prueba a este dispositivo</Text>
+            </View>
+            <Icon name="chevron-right" size={20} color={C.textLight} />
+          </TouchableOpacity>
 
         </View>
       </SubModal>
@@ -1589,6 +1805,42 @@ const styles = StyleSheet.create({
   bubbleTextMine: { color: '#FFF' },
   bubbleTime: { fontSize: 11, color: C.textLight, marginTop: 4 },
   bubbleTimeMine: { color: 'rgba(255,255,255,0.7)' },
+  bubbleMedia: { padding: 4, overflow: 'hidden' },
+  mediaImage: {
+    width: 220,
+    minHeight: 140,
+    maxHeight: 320,
+    borderRadius: 12,
+    backgroundColor: '#0002',
+  },
+  mediaOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+  },
+  videoThumb: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1a1a1a',
+  },
+  videoViewer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  videoViewerClose: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   chatInputRow: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 12, paddingVertical: 12,
@@ -1698,6 +1950,26 @@ const styles = StyleSheet.create({
   lazoIconWrap: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: C.greenLight, alignItems: 'center', justifyContent: 'center',
+  },
+  unreadBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    backgroundColor: '#D9534F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: C.white,
+  },
+  unreadBadgeText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: '700',
+    lineHeight: 12,
   },
   deleteBtn: {
     width: 36, height: 36, borderRadius: 18,

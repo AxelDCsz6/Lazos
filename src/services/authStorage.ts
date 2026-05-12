@@ -28,7 +28,17 @@ export async function getSavedUser(): Promise<User | null> {
   const result = await Keychain.getGenericPassword({ service: SERVICE_USER });
   if (!result) return null;
   try {
-    return JSON.parse(result.password) as User;
+    const parsed = JSON.parse(result.password);
+    // Validar shape mínimo: datos viejos del Keychain tras cambios de schema
+    // pueden faltar campos y romper el bootstrap.
+    if (
+      parsed &&
+      typeof parsed.id === 'string' &&
+      typeof parsed.username === 'string'
+    ) {
+      return parsed as User;
+    }
+    return null;
   } catch {
     return null;
   }

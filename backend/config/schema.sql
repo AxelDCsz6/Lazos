@@ -46,12 +46,18 @@ CREATE TABLE messages (
   id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   lazo_id      UUID        NOT NULL REFERENCES lazos(id) ON DELETE CASCADE,
   sender_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  content      TEXT        NOT NULL,
+  content      TEXT        NOT NULL DEFAULT '',
   type         VARCHAR(10) NOT NULL DEFAULT 'text'
-               CHECK (type IN ('text', 'photo')),
+               CHECK (type IN ('text', 'photo', 'video')),
   status       VARCHAR(10) NOT NULL DEFAULT 'sent'
                CHECK (status IN ('sent', 'delivered')),
   reply_to_id  UUID        REFERENCES messages(id) ON DELETE SET NULL,
+  media_url    VARCHAR(500),
+  media_mime   VARCHAR(50),
+  media_size   INTEGER,
+  media_width  INTEGER,
+  media_height INTEGER,
+  media_duration_ms INTEGER,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

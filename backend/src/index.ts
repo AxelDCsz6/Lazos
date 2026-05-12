@@ -7,6 +7,7 @@ import { startStreakJob } from './jobs/streakJob';
 import { startDailyReminderJob } from './jobs/dailyReminderJob';
 import { connectDB } from './config/database';
 import authRoutes from './routes/authRoutes';
+import { UPLOADS_ROOT } from './middleware/upload';
 
 dotenv.config();
 
@@ -21,6 +22,15 @@ app.use(express.json());
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// ─── Media estático ───────────────────────────────────────────
+// Sirve los archivos subidos por mensajes. URLs llevan UUID no adivinable
+// como medida básica de privacidad para MVP. TODO: añadir middleware que
+// verifique membresía al lazo antes de servir el archivo.
+app.use('/media', express.static(UPLOADS_ROOT, {
+  maxAge: '7d',
+  fallthrough: false,
+}));
 
 // ─── Rutas ────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);

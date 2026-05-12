@@ -15,7 +15,7 @@ import { useAuth } from '../hooks/useAuth';
 import { AuthStack } from './AuthStack';
 import { AppTabs } from './AppTabs';
 import { RootStackParamList } from '../types';
-import { setupForegroundHandler } from '../services/notificationService';
+import { setupForegroundHandler, registerForPushNotifications } from '../services/notificationService';
 import { getSharedData, clearSharedData } from '../services/shareIntent';
 import { fetchLazos } from '../services/lazosService';
 import { sendMessage } from '../services/messages';
@@ -46,6 +46,16 @@ export function RootNavigator() {
     });
     return unsubscribe;
   }, []);
+
+  // Registrar token FCM una vez que el navegador está montado y la sesión está activa.
+  // Si Play Services tarda en cold-start, el timeout interno evita bloquear la UI.
+  useEffect(() => {
+    if (!isAuthenticated) { return; }
+    const t = setTimeout(() => {
+      registerForPushNotifications().catch(() => {});
+    }, 500);
+    return () => clearTimeout(t);
+  }, [isAuthenticated]);
 
   // Check for shared data on mount and when auth state changes
   useEffect(() => {

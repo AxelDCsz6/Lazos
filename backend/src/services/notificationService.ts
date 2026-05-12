@@ -34,9 +34,12 @@ async function sendToToken(
   data?: Record<string, string>,
 ): Promise<void> {
   initFirebase();
-  if (!initialized) { return; }
+  if (!initialized) {
+    console.error('[notifications] Firebase Admin no inicializado, descarto envío');
+    return;
+  }
   try {
-    await admin.messaging().send({
+    const messageId = await admin.messaging().send({
       token,
       notification: { title, body },
       data,
@@ -47,11 +50,12 @@ async function sendToToken(
         },
       },
     });
+    console.log(`[notifications] enviada (${messageId}) → ${token.slice(0, 12)}…  "${title}"`);
   } catch (err: unknown) {
-    // Si el token es inválido, lo limpiamos de la BD
     const code = (err as { code?: string }).code;
     if (code === 'messaging/registration-token-not-registered' ||
         code === 'messaging/invalid-registration-token') {
+      console.warn(`[notifications] Token caducado, limpiando: ${token.slice(0, 12)}…`);
       await db.query('UPDATE users SET fcm_token = NULL WHERE fcm_token = $1', [token]);
     } else {
       console.error('[notifications] sendToToken error:', err);
@@ -122,6 +126,16 @@ export async function notifyWatering(
   } catch (err) {
     console.error('[notifications] notifyWatering error:', err);
   }
+}
+
+// ─── Notificación de prueba ────────────────────────────────────
+export async function sendTestToToken(token: string): Promise<void> {
+  await sendToToken(
+    token,
+    '🔔 Prueba Lazos',
+    'Si ves esto, las notificaciones funcionan.',
+    { type: 'test' },
+  );
 }
 
 // ─── Recordatorios diarios ─────────────────────────────────────

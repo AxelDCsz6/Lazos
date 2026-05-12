@@ -1,9 +1,12 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   TextInput,
   TouchableOpacity,
   StyleSheet,
+  Animated,
+  Easing,
+  Text,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -19,11 +22,30 @@ const C = {
 interface Props {
   onSend: (text: string) => Promise<void>;
   onFocusExpand: () => void;
+  onPickFromCamera?: () => void;
+  onPickFromGallery?: () => void;
 }
 
-export const ChatInput = React.memo(function ChatInput({ onSend, onFocusExpand }: Props) {
+export const ChatInput = React.memo(function ChatInput({
+  onSend,
+  onFocusExpand,
+  onPickFromCamera,
+  onPickFromGallery,
+}: Props) {
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuAnim = useRef(new Animated.Value(0)).current;
+
+  // Animar apertura/cierre del menú de adjuntos.
+  useEffect(() => {
+    Animated.timing(menuAnim, {
+      toValue: menuOpen ? 1 : 0,
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [menuOpen, menuAnim]);
 
   const handleSend = useCallback(async () => {
     const text = inputText.trim();
@@ -37,32 +59,74 @@ export const ChatInput = React.memo(function ChatInput({ onSend, onFocusExpand }
     }
   }, [inputText, sending, onSend]);
 
+  const handlePickCamera = useCallback(() => {
+    setMenuOpen(false);
+    onPickFromCamera?.();
+  }, [onPickFromCamera]);
+
+  const handlePickGallery = useCallback(() => {
+    setMenuOpen(false);
+    onPickFromGallery?.();
+  }, [onPickFromGallery]);
+
   return (
-    <View style={styles.chatInputRow}>
-      <TouchableOpacity style={styles.chatPlus}>
-        <Icon name="plus" size={22} color={C.textSoft} />
-      </TouchableOpacity>
-      <TextInput
-        style={styles.chatInput}
-        value={inputText}
-        onChangeText={setInputText}
-        placeholder="Escribe un mensaje..."
-        placeholderTextColor={C.textLight}
-        multiline
-        maxLength={1000}
-        onFocus={onFocusExpand}
-      />
-      <TouchableOpacity
-        style={styles.chatSend}
-        onPress={handleSend}
-        disabled={!inputText.trim() || sending}>
-        <Icon
-          name="send"
-          size={18}
-          color={inputText.trim() && !sending ? C.green : C.textLight}
+    <>
+      {/* Menú de adjuntos (cámara / galería). Se renderiza condicionalmente
+          para no interceptar toques cuando está cerrado. */}
+      {menuOpen && (
+        <Animated.View
+          style={[
+            styles.attachMenu,
+            {
+              opacity: menuAnim,
+              transform: [{
+                translateY: menuAnim.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }),
+              }],
+            },
+          ]}>
+          <TouchableOpacity style={styles.attachOption} onPress={handlePickCamera}>
+            <View style={[styles.attachIcon, { backgroundColor: '#E8F3EC' }]}>
+              <Icon name="camera" size={22} color={C.green} />
+            </View>
+            <Text style={styles.attachLabel}>Cámara</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.attachOption} onPress={handlePickGallery}>
+            <View style={[styles.attachIcon, { backgroundColor: '#F0E8DC' }]}>
+              <Icon name="image-multiple" size={22} color={C.textSoft} />
+            </View>
+            <Text style={styles.attachLabel}>Galería</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
+      <View style={styles.chatInputRow}>
+        <TouchableOpacity
+          style={styles.chatPlus}
+          onPress={() => setMenuOpen(o => !o)}>
+          <Icon name={menuOpen ? 'close' : 'plus'} size={22} color={C.textSoft} />
+        </TouchableOpacity>
+        <TextInput
+          style={styles.chatInput}
+          value={inputText}
+          onChangeText={setInputText}
+          placeholder="Escribe un mensaje..."
+          placeholderTextColor={C.textLight}
+          multiline
+          maxLength={1000}
+          onFocus={() => { setMenuOpen(false); onFocusExpand(); }}
         />
-      </TouchableOpacity>
-    </View>
+        <TouchableOpacity
+          style={styles.chatSend}
+          onPress={handleSend}
+          disabled={!inputText.trim() || sending}>
+          <Icon
+            name="send"
+            size={18}
+            color={inputText.trim() && !sending ? C.green : C.textLight}
+          />
+        </TouchableOpacity>
+      </View>
+    </>
   );
 });
 
@@ -95,5 +159,29 @@ const styles = StyleSheet.create({
     backgroundColor: C.beige,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  attachMenu: {
+    flexDirection: 'row',
+    backgroundColor: C.white,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 4,
+    gap: 24,
+  },
+  attachOption: {
+    alignItems: 'center',
+    gap: 6,
+  },
+  attachIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachLabel: {
+    fontSize: 12,
+    color: C.textSoft,
+    fontWeight: '600',
   },
 });

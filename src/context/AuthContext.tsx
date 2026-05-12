@@ -32,8 +32,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const savedUser = await getSavedUser();
         if (savedUser) {
           setUser(savedUser);
-          // Registrar token FCM al restaurar sesión
-          registerForPushNotifications().catch(() => {});
+          // El registro FCM se difiere a RootNavigator post-mount para no
+          // bloquear ni reventar el cold-start si Play Services tarda.
         }
       } catch {
         // sesión no disponible

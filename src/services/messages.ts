@@ -16,6 +16,11 @@ function mapMessage(m: any): Message {
     reactions: Array.isArray(m.reactions)
       ? (m.reactions as any[]).map(r => ({ userId: r.userId ?? r.user_id, type: r.type }))
       : [],
+    mediaUrl: m.media_url ?? undefined,
+    mediaMime: m.media_mime ?? undefined,
+    mediaWidth: m.media_width ?? undefined,
+    mediaHeight: m.media_height ?? undefined,
+    mediaDurationMs: m.media_duration_ms ?? undefined,
   };
 }
 

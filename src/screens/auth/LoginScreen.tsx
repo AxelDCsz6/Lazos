@@ -11,8 +11,8 @@ type Props = {
 
 export function LoginScreen({ navigation }: Props) {
   const { login } = useAuth();
-  const [username, setUsername] = useState('axeldc');
-  const [password, setPassword] = useState('123456');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
