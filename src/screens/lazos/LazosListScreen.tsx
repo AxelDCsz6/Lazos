@@ -401,6 +401,8 @@ function WaterButton({
 // ─── Chat con slide a pantalla completa ───────────────────────
 const CHAT_HALF_HEIGHT = SH * 0.52; // altura visible en modo medio
 
+const STATUS_BAR_H = StatusBar.currentHeight ?? 24;
+
 const ChatHeader = React.memo(function ChatHeader({
   partnerUsername,
   isFullscreen,
@@ -415,26 +417,23 @@ const ChatHeader = React.memo(function ChatHeader({
   panHandlers: object;
 }) {
   return (
-    <SafeAreaView edges={['top']} style={{ backgroundColor: C.green }}>
-      <View style={styles.chatHeader} {...panHandlers}>
-        <View style={styles.chatHeaderRow}>
-          <TouchableOpacity onPress={onClose} style={styles.chatClose}>
-            <Icon name="close" size={20} color="#FFF" />
-          </TouchableOpacity>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.chatTitle}>{partnerUsername}</Text>
-            <Text style={styles.chatSubtitle}>En línea</Text>
-          </View>
-          <TouchableOpacity onPress={onToggleFullscreen} style={styles.chatExpandBtn}>
-            <Icon
-              name={isFullscreen ? 'chevron-down' : 'chevron-up'}
-              size={22}
-              color="#FFF"
-            />
-          </TouchableOpacity>
-        </View>
+    <View
+      style={[styles.chatHeader, { paddingTop: isFullscreen ? STATUS_BAR_H + 8 : 8 }]}
+      {...panHandlers}>
+      <View style={styles.chatHeaderRow}>
+        <TouchableOpacity onPress={onClose} style={styles.chatClose}>
+          <Icon name="close" size={20} color="#FFF" />
+        </TouchableOpacity>
+        <Text style={[styles.chatTitle, { flex: 1 }]}>{partnerUsername}</Text>
+        <TouchableOpacity onPress={onToggleFullscreen} style={styles.chatExpandBtn}>
+          <Icon
+            name={isFullscreen ? 'chevron-down' : 'chevron-up'}
+            size={22}
+            color="#FFF"
+          />
+        </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
   );
 });
 
@@ -469,6 +468,8 @@ function ChatModal({
   const heartAnims = useRef<Map<string, Animated.Value>>(new Map()).current;
   // Double-tap timestamps: messageId -> last tap ms
   const tapTimestamps = useRef<Map<string, number>>(new Map()).current;
+  // Swipeable refs: messageId -> Swipeable instance for instant close
+  const swipeableRefs = useRef<Map<string, Swipeable>>(new Map()).current;
 
   // ── Fetch helpers ──
   const loadPage = useCallback(
@@ -757,13 +758,20 @@ function ChatModal({
                 return (
                   <View style={{ overflow: 'visible', marginBottom: heartCount > 0 ? 12 : 0 }}>
                     <Swipeable
+                      ref={ref => {
+                        if (ref) { swipeableRefs.set(item.id, ref); }
+                        else { swipeableRefs.delete(item.id); }
+                      }}
                       renderLeftActions={() => (
                         <View style={styles.swipeReplyHint}>
                           <Icon name="reply" size={20} color={C.green} />
                         </View>
                       )}
                       onSwipeableWillOpen={(direction: 'left' | 'right') => {
-                        if (direction === 'left') { setReplyTarget(item); }
+                        if (direction === 'left') {
+                          setReplyTarget(item);
+                          swipeableRefs.get(item.id)?.close();
+                        }
                       }}
                       overshootFriction={8}
                       overshootLeft={false}
