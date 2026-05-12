@@ -1,7 +1,9 @@
 import { Response } from 'express';
 import { db } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
-import { notifyWatering } from '../services/notificationService';
+import { notifyWatering, notifyLazoCreated, notifyLazoDeleted } from '../services/notificationService';
+import path from 'path';
+import fs from 'fs';
 
 // ─── Helpers ──────────────────────────────────────────────────
 function computePlantPhase(xp: number): string {
@@ -118,11 +120,19 @@ export async function joinLazo(req: AuthRequest, res: Response): Promise<void> {
       [code],
     );
 
+    const lazoId = lazoResult.rows[0].id;
+
     res.json({
       success: true,
       message: 'Lazo creado correctamente',
-      lazoId: lazoResult.rows[0].id,
+      lazoId,
     });
+
+    // Notificar al creador del código (fire-and-forget)
+    const joinerResult = await db.query('SELECT username FROM users WHERE id = $1', [userId]);
+    if (joinerResult.rows.length > 0) {
+      notifyLazoCreated(invite.creator_id, joinerResult.rows[0].username, lazoId).catch(() => {});
+    }
   } catch (err) {
     console.error('[lazos/join]', err);
     res.status(500).json({ message: 'Error al unirse al lazo' });
@@ -290,5 +300,48 @@ export async function waterLazo(req: AuthRequest, res: Response): Promise<void> 
   } catch (err) {
     console.error('[lazos/regar]', err);
     res.status(500).json({ message: 'Error al regar' });
+  }
+}
+
+// ─── DELETE /api/lazos/:id ────────────────────────────────────
+export async function deleteLazo(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const userId = req.userId;
+    const lazoId = req.params.id;
+    if (!userId) { res.status(401).json({ message: 'No autorizado' }); return; }
+
+    const lazoResult = await db.query(
+      `SELECT l.id, l.user1_id, l.user2_id,
+              u.username AS deleter_username
+       FROM lazos l
+       JOIN users u ON u.id = $2
+       WHERE l.id = $1 AND (l.user1_id = $2 OR l.user2_id = $2) AND l.is_active = TRUE`,
+      [lazoId, userId],
+    );
+
+    if (lazoResult.rows.length === 0) {
+      res.status(404).json({ message: 'Lazo no encontrado o sin acceso' }); return;
+    }
+
+    const { user1_id, user2_id, deleter_username } = lazoResult.rows[0];
+    const partnerId = String(user1_id) === String(userId) ? user2_id : user1_id;
+
+    await db.query('DELETE FROM lazos WHERE id = $1', [lazoId]);
+
+    res.json({ ok: true });
+
+    // Borrar archivos del lazo (best-effort)
+    try {
+      const uploadsDir = path.join(process.cwd(), 'uploads', lazoId);
+      if (fs.existsSync(uploadsDir)) {
+        fs.rmSync(uploadsDir, { recursive: true, force: true });
+      }
+    } catch { /* silencioso */ }
+
+    // Notificar al partner (fire-and-forget)
+    notifyLazoDeleted(partnerId, deleter_username, lazoId).catch(() => {});
+  } catch (err) {
+    console.error('[lazos/delete]', err);
+    res.status(500).json({ message: 'Error al eliminar lazo' });
   }
 }

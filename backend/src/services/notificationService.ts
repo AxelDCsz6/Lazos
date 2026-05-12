@@ -128,14 +128,50 @@ export async function notifyWatering(
   }
 }
 
-// ─── Notificación de prueba ────────────────────────────────────
-export async function sendTestToToken(token: string): Promise<void> {
-  await sendToToken(
-    token,
-    '🔔 Prueba Lazos',
-    'Si ves esto, las notificaciones funcionan.',
-    { type: 'test' },
-  );
+// ─── Notificar creación de lazo (al invitador) ────────────────
+export async function notifyLazoCreated(
+  inviterUserId: string,
+  joinerUsername: string,
+  lazoId: string,
+): Promise<void> {
+  try {
+    const result = await db.query(
+      'SELECT fcm_token FROM users WHERE id = $1',
+      [inviterUserId],
+    );
+    if (result.rows.length === 0 || !result.rows[0].fcm_token) { return; }
+    await sendToToken(
+      result.rows[0].fcm_token,
+      '¡Nuevo lazo!',
+      `${joinerUsername} se unió a tu lazo`,
+      { type: 'lazo_created', lazoId },
+    );
+  } catch (err) {
+    console.error('[notifications] notifyLazoCreated error:', err);
+  }
+}
+
+// ─── Notificar eliminación de lazo (al partner) ───────────────
+export async function notifyLazoDeleted(
+  partnerUserId: string,
+  deleterUsername: string,
+  lazoId: string,
+): Promise<void> {
+  try {
+    const result = await db.query(
+      'SELECT fcm_token FROM users WHERE id = $1',
+      [partnerUserId],
+    );
+    if (result.rows.length === 0 || !result.rows[0].fcm_token) { return; }
+    await sendToToken(
+      result.rows[0].fcm_token,
+      'Lazo eliminado',
+      `${deleterUsername} eliminó su lazo contigo`,
+      { type: 'lazo_deleted', lazoId, deleterUsername },
+    );
+  } catch (err) {
+    console.error('[notifications] notifyLazoDeleted error:', err);
+  }
 }
 
 // ─── Recordatorios diarios ─────────────────────────────────────

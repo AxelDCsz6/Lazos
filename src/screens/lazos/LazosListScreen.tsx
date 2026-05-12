@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -25,7 +26,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { LazosModal } from '../../components/LazosModal';
 import { AnimatedPlant } from '../../components/AnimatedPlant';
 import { ChatInput } from '../../components/ChatInput';
-import { fetchLazos, waterLazo as waterLazoApi } from '../../services/lazosService';
+import { fetchLazos, waterLazo as waterLazoApi, deleteLazoRemote } from '../../services/lazosService';
 import {
   getMessages as fetchMessages,
   sendMessage as apiSendMessage,
@@ -1042,6 +1043,7 @@ function SideMenu({
   lazos,
   onSelectLazo,
   onNewLazo,
+  onDeleteLazo,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -1049,6 +1051,7 @@ function SideMenu({
   lazos: Lazo[];
   onSelectLazo: (lazo: Lazo) => void;
   onNewLazo: () => void;
+  onDeleteLazo: (lazoId: string) => Promise<void>;
 }) {
   const translateX = useRef(new Animated.Value(-SW * 0.78)).current;
 
@@ -1085,17 +1088,32 @@ function SideMenu({
   }, []);
 
   // ── Handlers ──
+  const pendingDeleteRef = useRef<Lazo | null>(null);
+
   const handleDelete = (lazo: Lazo) => {
     setLocalLazos(prev => prev.filter(l => l.id !== lazo.id));
     setDeletedLazo(lazo);
+    pendingDeleteRef.current = lazo;
     if (undoTimer.current) { clearTimeout(undoTimer.current); }
-    undoTimer.current = setTimeout(() => setDeletedLazo(null), 4000);
+    undoTimer.current = setTimeout(async () => {
+      const pending = pendingDeleteRef.current;
+      if (!pending) { return; }
+      setDeletedLazo(null);
+      pendingDeleteRef.current = null;
+      try {
+        await onDeleteLazo(pending.id);
+      } catch (err: any) {
+        setLocalLazos(prev => [...prev, pending]);
+        Alert.alert('Error', err.message ?? 'No se pudo eliminar el lazo');
+      }
+    }, 4000);
   };
 
   const handleUndo = () => {
     if (!deletedLazo) { return; }
     setLocalLazos(prev => [...prev, deletedLazo]);
     setDeletedLazo(null);
+    pendingDeleteRef.current = null;
     if (undoTimer.current) { clearTimeout(undoTimer.current); }
   };
 
@@ -1426,27 +1444,6 @@ function SettingsModal({ visible, onClose }: { visible: boolean; onClose: () => 
             />
           </View>
 
-          <TouchableOpacity
-            style={styles.settingsItem}
-            onPress={async () => {
-              try {
-                const { sendTestNotification } = await import('../../services/notificationsApi');
-                const { tokenPreview } = await sendTestNotification();
-                Alert.alert('Notificación enviada', `Token: ${tokenPreview}\nDeberías verla en segundos.`);
-              } catch (e: any) {
-                Alert.alert('Error', e?.message ?? 'No se pudo enviar la notificación de prueba');
-              }
-            }}>
-            <View style={styles.settingsIconWrap}>
-              <Icon name="bell-ring-outline" size={22} color={C.greenDark} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.settingsTitle}>Probar notificación</Text>
-              <Text style={styles.settingsSub}>Envía una notificación de prueba a este dispositivo</Text>
-            </View>
-            <Icon name="chevron-right" size={20} color={C.textLight} />
-          </TouchableOpacity>
-
         </View>
       </SubModal>
 
@@ -1514,6 +1511,31 @@ export function LazosListScreen() {
 
   useEffect(() => { loadLazos(); }, [loadLazos]);
 
+  // Refrescar al volver a la pantalla (fallback cuando FCM falla)
+  useFocusEffect(useCallback(() => { loadLazos(); }, [loadLazos]));
+
+  // Suscripciones a eventos en tiempo real
+  useEffect(() => {
+    const subRefresh = DeviceEventEmitter.addListener(
+      'lazos:refresh',
+      () => { loadLazos(); },
+    );
+    const subDeleted = DeviceEventEmitter.addListener(
+      'lazos:deleted-by-partner',
+      ({ deleterUsername }: { lazoId: string; deleterUsername: string }) => {
+        loadLazos();
+        Alert.alert('Lazo eliminado', `${deleterUsername} eliminó su lazo contigo`);
+      },
+    );
+    return () => { subRefresh.remove(); subDeleted.remove(); };
+  }, [loadLazos]);
+
+  // Eliminar lazo en backend (lo llama SideMenu tras el undo timer)
+  const handleDeleteLazo = useCallback(async (lazoId: string) => {
+    await deleteLazoRemote(lazoId);
+    loadLazos();
+  }, [loadLazos]);
+
   const handleWater = useCallback(async () => {
     if (!activeLazo) { return; }
     try {
@@ -1565,7 +1587,9 @@ export function LazosListScreen() {
           <TouchableOpacity style={styles.headerBtn} onPress={() => setMenuOpen(true)}>
             <Icon name="menu" size={26} color={C.text} />
           </TouchableOpacity>
-          <Text style={styles.headerName}>{user?.username ?? 'Lazos'}</Text>
+          <Text style={styles.headerName} numberOfLines={1}>
+            {activeLazo?.partnerUsername ?? user?.username ?? 'Lazos'}
+          </Text>
           <TouchableOpacity style={styles.headerBtn} onPress={() => setSettingsOpen(true)}>
             <Icon name="cog-outline" size={26} color={C.text} />
           </TouchableOpacity>
@@ -1628,7 +1652,7 @@ export function LazosListScreen() {
         </View>
       </SafeAreaView>
 
-      <ChatModal visible={chatOpen} onClose={() => setChatOpen(false)} lazo={activeLazo} />
+      <ChatModal visible={chatOpen} onClose={() => { setChatOpen(false); loadLazos(); }} lazo={activeLazo} />
       <SideMenu
         visible={menuOpen}
         onClose={() => setMenuOpen(false)}
@@ -1636,6 +1660,7 @@ export function LazosListScreen() {
         lazos={lazos}
         onSelectLazo={lazo => setActiveLazo(lazo)}
         onNewLazo={() => setLazosModalOpen(true)}
+        onDeleteLazo={handleDeleteLazo}
       />
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <LazosModal visible={lazosModalOpen} onClose={() => setLazosModalOpen(false)} onLazoCreated={loadLazos} />

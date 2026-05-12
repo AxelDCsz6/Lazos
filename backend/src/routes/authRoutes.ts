@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { register, login, updateFcmToken, refresh, sendTestNotification } from '../controllers/authController';
+import { register, login, updateFcmToken, refresh } from '../controllers/authController';
 import { validateAuth } from '../middleware/validate';
 import { authMiddleware } from '../middleware/auth';
 
@@ -17,7 +17,5 @@ router.post('/refresh', refresh);
 // PUT /api/auth/fcm-token
 router.put('/fcm-token', authMiddleware, updateFcmToken);
 
-// POST /api/auth/test-notification (debug)
-router.post('/test-notification', authMiddleware, sendTestNotification);
 
 export default router;

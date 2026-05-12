@@ -1,4 +1,4 @@
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform, PermissionsAndroid, DeviceEventEmitter } from 'react-native';
 import messaging from '@react-native-firebase/messaging';
 import { api } from './api';
 
@@ -97,6 +97,16 @@ export function setupForegroundHandler(
       } catch {
         // best-effort
       }
+    }
+
+    // Emitir eventos para que la UI reaccione en tiempo real
+    if (kind === 'watering' && lazoId) {
+      DeviceEventEmitter.emit('lazos:refresh', { reason: 'watering', lazoId });
+    } else if (kind === 'lazo_created' && lazoId) {
+      DeviceEventEmitter.emit('lazos:refresh', { reason: 'created', lazoId });
+    } else if (kind === 'lazo_deleted' && lazoId) {
+      const deleterUsername = typeof data.deleterUsername === 'string' ? data.deleterUsername : '';
+      DeviceEventEmitter.emit('lazos:deleted-by-partner', { lazoId, deleterUsername });
     }
 
     if (title || body) {

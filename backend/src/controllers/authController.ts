@@ -110,21 +110,3 @@ export async function updateFcmToken(req: AuthRequest, res: Response): Promise<v
   res.json({ success: true });
 }
 
-// ─── POST /api/auth/test-notification (debug) ──────────────────
-// Envía una notificación de prueba al token FCM del usuario autenticado.
-// Útil para confirmar que la cadena Firebase → device funciona end-to-end.
-export async function sendTestNotification(req: AuthRequest, res: Response): Promise<void> {
-  const userId = req.userId;
-  if (!userId) { res.status(401).json({ message: 'No autorizado' }); return; }
-
-  const result = await db.query('SELECT fcm_token FROM users WHERE id = $1', [userId]);
-  const fcmToken = result.rows[0]?.fcm_token;
-  if (!fcmToken) {
-    res.status(400).json({ message: 'Sin FCM token registrado' });
-    return;
-  }
-
-  const { sendTestToToken } = await import('../services/notificationService');
-  await sendTestToToken(fcmToken);
-  res.json({ success: true, tokenPreview: fcmToken.slice(0, 12) + '…' });
-}

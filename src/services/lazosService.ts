@@ -41,6 +41,16 @@ export async function fetchLazos(): Promise<any[]> {
   return data.lazos;
 }
 
+// ─── Eliminar un lazo ────────────────────────────────────────
+export async function deleteLazoRemote(lazoId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/lazos/${lazoId}`, {
+    method: 'DELETE',
+    headers: await authHeaders(),
+  });
+  const data = await res.json() as { message?: string };
+  if (!res.ok) { throw new Error(data.message ?? 'Error al eliminar lazo'); }
+}
+
 // ─── Regar la planta de un lazo ───────────────────────────────
 export async function waterLazo(lazoId: string): Promise<{
   success: boolean;

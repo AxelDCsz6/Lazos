@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { generateCode, joinLazo, getLazos, waterLazo } from '../controllers/lazosController';
+import { generateCode, joinLazo, getLazos, waterLazo, deleteLazo } from '../controllers/lazosController';
 import { getMessages, sendMessage, sendMediaMessage } from '../controllers/messagesController';
 import { toggleReaction } from '../controllers/reactionsController';
 import { authMiddleware } from '../middleware/auth';
@@ -14,6 +14,7 @@ router.get('/:id/messages',                           authMiddleware, getMessage
 router.post('/:id/messages',                          authMiddleware, sendMessage);
 router.post('/:id/messages/media',                    authMiddleware, uploadMessageMedia, sendMediaMessage);
 router.post('/:id/regar',                             authMiddleware, waterLazo);
+router.delete('/:id',                                 authMiddleware, deleteLazo);
 router.post('/:id/messages/:messageId/react',         authMiddleware, toggleReaction);
 
 export default router;
