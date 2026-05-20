@@ -23,8 +23,12 @@ api.interceptors.response.use(
   response => response,
   async error => {
     const status = error.response?.status;
+    const url: string = error.config?.url ?? '';
 
-    if (status === 401) {
+    // No interceptar 401 en login/register — ahí significa credenciales incorrectas
+    const isAuthRoute = url.includes('/auth/login') || url.includes('/auth/register') || url.includes('/auth/refresh');
+
+    if (status === 401 && !isAuthRoute) {
       const { removeToken, removeUser } = await import('./authStorage');
       await Promise.all([removeToken(), removeUser()]);
       DeviceEventEmitter.emit('auth:sessionExpired');

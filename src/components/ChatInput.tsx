@@ -2,12 +2,12 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   TextInput,
-  TouchableOpacity,
   StyleSheet,
   Animated,
   Easing,
   Text,
 } from 'react-native';
+import { TouchableOpacity } from 'react-native-gesture-handler';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 const C = {
