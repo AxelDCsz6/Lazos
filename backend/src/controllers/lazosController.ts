@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { db } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
 import { notifyWatering, notifyLazoCreated, notifyLazoDeleted } from '../services/notificationService';
+import { emitToLazo, emitToUser } from '../realtime';
 import path from 'path';
 import fs from 'fs';
 
@@ -131,7 +132,10 @@ export async function joinLazo(req: AuthRequest, res: Response): Promise<void> {
     // Notificar al creador del código (fire-and-forget)
     const joinerResult = await db.query('SELECT username FROM users WHERE id = $1', [userId]);
     if (joinerResult.rows.length > 0) {
-      notifyLazoCreated(invite.creator_id, joinerResult.rows[0].username, lazoId).catch(() => {});
+      const partnerUsername = joinerResult.rows[0].username;
+      notifyLazoCreated(invite.creator_id, partnerUsername, lazoId).catch(() => {});
+      // Realtime: si el creador del código está conectado, avísalo al instante
+      emitToUser(invite.creator_id, 'lazo:created', { lazoId, partnerUsername });
     }
   } catch (err) {
     console.error('[lazos/join]', err);
@@ -293,6 +297,19 @@ export async function waterLazo(req: AuthRequest, res: Response): Promise<void> 
       justStreaked,
     });
 
+    // Realtime: avisar a la sala del lazo del nuevo estado de riego/planta.
+    // partnerWateredToday=true desde la perspectiva del otro usuario: él/ella
+    // ve que SU partner (el que acaba de regar) ya regó hoy.
+    emitToLazo(lazoId, 'watering:update', {
+      lazoId,
+      partnerWateredToday: true,
+      streak,
+      plantPhase,
+      plantXp,
+      justStreaked,
+      wateredByUserId: String(userId),
+    });
+
     // Notificar al compañero del riego (fire-and-forget)
     if (isFirstWateringToday) {
       notifyWatering(lazoId, userId, justStreaked).catch(() => {});
@@ -337,6 +354,9 @@ export async function deleteLazo(req: AuthRequest, res: Response): Promise<void>
         fs.rmSync(uploadsDir, { recursive: true, force: true });
       }
     } catch { /* silencioso */ }
+
+    // Realtime: avisar al partner instantáneamente si está conectado
+    emitToUser(partnerId, 'lazo:deleted', { lazoId, deleterUsername: deleter_username });
 
     // Notificar al partner (fire-and-forget)
     notifyLazoDeleted(partnerId, deleter_username, lazoId).catch(() => {});

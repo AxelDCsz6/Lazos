@@ -7,6 +7,7 @@ import {
   logout as logoutService,
 } from '../services/authService';
 import { registerForPushNotifications, listenForTokenRefresh } from '../services/notificationService';
+import { connectRealtime, disconnectRealtime } from '../services/realtimeService';
 import { User } from '../types';
 
 interface AuthContextValue {
@@ -34,6 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(savedUser);
           // El registro FCM se difiere a RootNavigator post-mount para no
           // bloquear ni reventar el cold-start si Play Services tarda.
+          connectRealtime().catch(() => {});
         }
       } catch {
         // sesión no disponible
@@ -47,6 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Forzar logout si el refresh token también expiró
     const unsubscribeExpired = DeviceEventEmitter.addListener('auth:sessionExpired', () => {
+      disconnectRealtime();
       setUser(null);
     });
 
@@ -59,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     const { user: loggedUser } = await loginService(username, password);
     setUser(loggedUser);
+    connectRealtime().catch(() => {});
     // Pequeño delay para que la UI esté montada antes de mostrar el diálogo
     setTimeout(() => { registerForPushNotifications().catch(() => {}); }, 1000);
   }, []);
@@ -66,10 +70,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = useCallback(async (username: string, password: string) => {
     const { user: newUser } = await registerService(username, password);
     setUser(newUser);
+    connectRealtime().catch(() => {});
     setTimeout(() => { registerForPushNotifications().catch(() => {}); }, 1000);
   }, []);
 
   const logout = useCallback(async () => {
+    disconnectRealtime();
     await logoutService();
     setUser(null);
   }, []);

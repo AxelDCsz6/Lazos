@@ -1,3 +1,4 @@
+import http from 'http';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -8,6 +9,7 @@ import { startDailyReminderJob } from './jobs/dailyReminderJob';
 import { connectDB } from './config/database';
 import authRoutes from './routes/authRoutes';
 import { UPLOADS_ROOT } from './middleware/upload';
+import { initRealtime } from './realtime';
 
 dotenv.config();
 
@@ -43,9 +45,12 @@ app.use((_req, res) => {
 });
 
 // ─── Arrancar ─────────────────────────────────────────────────
+const server = http.createServer(app);
+initRealtime(server);
+
 connectDB()
   .then(() => {
-    app.listen(PORT, () => {
+    server.listen(PORT, () => {
       console.warn(`🚀 Backend corriendo en http://localhost:${PORT}`);
       startCleanupJob();
       startStreakJob();

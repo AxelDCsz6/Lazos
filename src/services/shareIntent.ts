@@ -1,9 +1,8 @@
 import { NativeModules, Platform } from 'react-native';
 
-interface SharedData {
-  type: 'text';
-  data: string;
-}
+export type SharedData =
+  | { type: 'text'; data: string }
+  | { type: 'photo' | 'video'; path: string; mime: string; size: number };
 
 const { ShareIntent } = NativeModules;
 

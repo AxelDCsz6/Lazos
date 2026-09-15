@@ -1,6 +1,32 @@
 import { Platform, PermissionsAndroid, DeviceEventEmitter } from 'react-native';
-import messaging from '@react-native-firebase/messaging';
 import { api } from './api';
+
+// Lazy/safe acceso a @react-native-firebase/messaging. Si el módulo nativo no
+// está disponible (p.ej. falta google-services.json en cold-start), devolvemos
+// null y todos los puntos de entrada hacen no-op en lugar de propagar el crash.
+type MessagingModule = ReturnType<typeof getMessagingModule>;
+function getMessagingModule(): any {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('@react-native-firebase/messaging');
+}
+
+function safeMessaging(): any | null {
+  try {
+    const mod = getMessagingModule();
+    const messaging = mod?.default;
+    if (typeof messaging !== 'function') {
+      console.warn('[notifications] messaging() no disponible');
+      return null;
+    }
+    // Probar instanciación; algunos errores nativos solo se ven aquí.
+    const instance = messaging();
+    if (!instance) { return null; }
+    return messaging;
+  } catch (err) {
+    console.warn('[notifications] Firebase messaging no disponible:', err);
+    return null;
+  }
+}
 
 // Race una promesa contra un timeout. Si timeout vence, resuelve a null.
 // Necesario porque messaging().getToken() y registerDeviceForRemoteMessages()
@@ -16,6 +42,11 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
 
 // ─── Solicitar permiso y registrar token FCM ───────────────────
 export async function registerForPushNotifications(): Promise<void> {
+  const messaging = safeMessaging();
+  if (!messaging) {
+    console.warn('[notifications] registerForPushNotifications: no-op (messaging no disponible)');
+    return;
+  }
   try {
     // Android 13+ (API 33) requiere permiso en tiempo de ejecución
     if (Platform.OS === 'android' && Platform.Version >= 33) {
@@ -46,7 +77,7 @@ export async function registerForPushNotifications(): Promise<void> {
       return;
     }
 
-    const token = await withTimeout(messaging().getToken(), 8000);
+    const token = await withTimeout<string>(messaging().getToken(), 8000);
     if (!token) {
       console.warn('[notifications] getToken() devolvió vacío o timeout');
       return;
@@ -61,13 +92,23 @@ export async function registerForPushNotifications(): Promise<void> {
 
 // ─── Escuchar cambios de token (rotación automática) ──────────
 export function listenForTokenRefresh(): () => void {
-  return messaging().onTokenRefresh(async (newToken) => {
-    try {
-      await api.put('/auth/fcm-token', { token: newToken });
-    } catch {
-      // silenciar error de red
-    }
-  });
+  const messaging = safeMessaging();
+  if (!messaging) {
+    console.warn('[notifications] listenForTokenRefresh: no-op (messaging no disponible)');
+    return () => {};
+  }
+  try {
+    return messaging().onTokenRefresh(async (newToken: string) => {
+      try {
+        await api.put('/auth/fcm-token', { token: newToken });
+      } catch {
+        // silenciar error de red
+      }
+    });
+  } catch (err) {
+    console.warn('[notifications] listenForTokenRefresh error:', err);
+    return () => {};
+  }
 }
 
 // Ref compartido del lazo cuyo chat está actualmente abierto. Se setea desde
@@ -81,56 +122,78 @@ export function getActiveChatLazo(): string | null { return activeChatLazoId; }
 export function setupForegroundHandler(
   onMessage: (title: string, body: string) => void,
 ): () => void {
-  return messaging().onMessage(async (remoteMessage) => {
-    const title = remoteMessage.notification?.title ?? '';
-    const body  = remoteMessage.notification?.body  ?? '';
-    const data = remoteMessage.data ?? {};
-    const lazoId = typeof data.lazoId === 'string' ? data.lazoId : undefined;
-    const kind = typeof data.type === 'string' ? data.type : undefined;
+  const messaging = safeMessaging();
+  if (!messaging) {
+    console.warn('[notifications] setupForegroundHandler: no-op (messaging no disponible)');
+    return () => {};
+  }
+  try {
+    return messaging().onMessage(async (remoteMessage: any) => {
+      const title = remoteMessage.notification?.title ?? '';
+      const body  = remoteMessage.notification?.body  ?? '';
+      const data = remoteMessage.data ?? {};
+      const lazoId = typeof data.lazoId === 'string' ? data.lazoId : undefined;
+      const kind = typeof data.type === 'string' ? data.type : undefined;
 
-    // Incrementar contador de no leídos si la notificación es de mensaje
-    // y el chat de ese lazo no está abierto en pantalla.
-    if (lazoId && kind === 'message' && activeChatLazoId !== lazoId) {
-      try {
-        const { incrementUnread } = await import('./unreadService');
-        await incrementUnread(lazoId);
-      } catch {
-        // best-effort
+      // Incrementar contador de no leídos si la notificación es de mensaje
+      // y el chat de ese lazo no está abierto en pantalla.
+      if (lazoId && kind === 'message' && activeChatLazoId !== lazoId) {
+        try {
+          const { incrementUnread } = await import('./unreadService');
+          await incrementUnread(lazoId);
+        } catch {
+          // best-effort
+        }
       }
-    }
 
-    // Emitir eventos para que la UI reaccione en tiempo real
-    if (kind === 'watering' && lazoId) {
-      DeviceEventEmitter.emit('lazos:refresh', { reason: 'watering', lazoId });
-    } else if (kind === 'lazo_created' && lazoId) {
-      DeviceEventEmitter.emit('lazos:refresh', { reason: 'created', lazoId });
-    } else if (kind === 'lazo_deleted' && lazoId) {
-      const deleterUsername = typeof data.deleterUsername === 'string' ? data.deleterUsername : '';
-      DeviceEventEmitter.emit('lazos:deleted-by-partner', { lazoId, deleterUsername });
-    }
+      // Emitir eventos para que la UI reaccione en tiempo real
+      if (kind === 'watering' && lazoId) {
+        DeviceEventEmitter.emit('lazos:refresh', { reason: 'watering', lazoId });
+      } else if (kind === 'lazo_created' && lazoId) {
+        DeviceEventEmitter.emit('lazos:refresh', { reason: 'created', lazoId });
+      } else if (kind === 'lazo_deleted' && lazoId) {
+        const deleterUsername = typeof data.deleterUsername === 'string' ? data.deleterUsername : '';
+        DeviceEventEmitter.emit('lazos:deleted-by-partner', { lazoId, deleterUsername });
+      }
 
-    if (title || body) {
-      onMessage(title, body);
-    }
-  });
+      if (title || body) {
+        onMessage(title, body);
+      }
+    });
+  } catch (err) {
+    console.warn('[notifications] setupForegroundHandler error:', err);
+    return () => {};
+  }
 }
 
 // ─── Handler para mensajes en background/killed ────────────────
 // Debe registrarse en index.js antes de cualquier componente
 export function setupBackgroundHandler(): void {
-  messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-    // FCM muestra la notificación automáticamente en background.
-    // Persistir incremento de no leídos para que al abrir la app el badge ya esté.
-    try {
-      const data = remoteMessage.data ?? {};
-      const lazoId = typeof data.lazoId === 'string' ? data.lazoId : undefined;
-      const kind = typeof data.type === 'string' ? data.type : undefined;
-      if (lazoId && kind === 'message') {
-        const { incrementUnread } = await import('./unreadService');
-        await incrementUnread(lazoId);
+  const messaging = safeMessaging();
+  if (!messaging) {
+    console.warn('[notifications] setupBackgroundHandler: no-op (messaging no disponible)');
+    return;
+  }
+  try {
+    messaging().setBackgroundMessageHandler(async (remoteMessage: any) => {
+      // FCM muestra la notificación automáticamente en background.
+      // Persistir incremento de no leídos para que al abrir la app el badge ya esté.
+      try {
+        const data = remoteMessage.data ?? {};
+        const lazoId = typeof data.lazoId === 'string' ? data.lazoId : undefined;
+        const kind = typeof data.type === 'string' ? data.type : undefined;
+        if (lazoId && kind === 'message') {
+          const { incrementUnread } = await import('./unreadService');
+          await incrementUnread(lazoId);
+        }
+      } catch {
+        // best-effort
       }
-    } catch {
-      // best-effort
-    }
-  });
+    });
+  } catch (err) {
+    console.warn('[notifications] setupBackgroundHandler error:', err);
+  }
 }
+
+// Tipo dummy export para evitar warning unused
+export type _MessagingModule = MessagingModule;

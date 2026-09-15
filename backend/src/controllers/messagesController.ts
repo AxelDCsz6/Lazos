@@ -4,6 +4,7 @@ import { db } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
 import { notifyNewMessage } from '../services/notificationService';
 import { isImageMime, isVideoMime } from '../middleware/upload';
+import { emitToLazo } from '../realtime';
 
 // ─── Helper: verifica que el usuario pertenece al lazo ────────
 async function checkLazoAccess(lazoId: string, userId: string): Promise<boolean> {
@@ -127,6 +128,10 @@ export async function sendMessage(req: AuthRequest, res: Response): Promise<void
 
     res.status(201).json({ message: msg });
 
+    // Realtime: avisar a los miembros del lazo (incluye al emisor; el cliente
+    // hace dedupe por id, evitando duplicados con el optimistic update).
+    emitToLazo(lazoId, 'message:new', msg);
+
     // Notificación al compañero (fire-and-forget, no bloquea la respuesta)
     notifyNewMessage(lazoId, userId, content.trim()).catch(() => {});
   } catch (err) {
@@ -224,6 +229,9 @@ export async function sendMediaMessage(req: AuthRequest, res: Response): Promise
     msg.reactions = [];
 
     res.status(201).json({ message: msg });
+
+    // Realtime: ver comentario en sendMessage
+    emitToLazo(lazoId, 'message:new', msg);
 
     const preview = type === 'photo' ? '📷 Foto' : '🎬 Video';
     notifyNewMessage(lazoId, userId, preview).catch(() => {});

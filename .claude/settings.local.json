@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npm run:*)",
+      "Bash(npx eslint:*)",
+      "Bash(node -e \"const path = require\\(''path''\\); const p = ''./lazos-1bdec-firebase-adminsdk-fbsvc-f00896c9b6.json''; console.log\\(path.resolve\\(process.cwd\\(\\), p\\)\\); require\\(''fs''\\).accessSync\\(path.resolve\\(process.cwd\\(\\), p\\)\\); console.log\\(''File accessible''\\);\")",
+      "Bash(psql:*)",
+      "Bash(curl -s http://187.173.233.24:3000/health)",
+      "Bash(curl -s http://187.173.233.24:3000/api/auth/fcm-token)",
+      "Bash(grep -r \"manifestPlaceholders\\\\|usesCleartextTraffic\" /home/axeldc/Nextcloud/Proyectos/Lazos/android/ --include=*.gradle --include=*.properties)",
+      "Bash(chmod:*)",
+      "Bash(./gradlew assembleRelease)",
+      "Bash(npm list:*)",
+      "Bash(npm install:*)",
+      "Bash(npx react-native:*)",
+      "Bash(npx jest:*)",
+      "Bash(ls /home/axeldc/Nextcloud/Proyectos/Lazos/android/app/*.keystore)",
+      "Read(//home/axeldc/Nextcloud/Proyectos/**)",
+      "Bash(npm test *)",
+      "Bash(git stash *)",
+      "Bash(git rm *)",
+      "Bash(xargs -r kill -9)",
+      "Bash(./gradlew clean *)"
+    ]
+  }
+}

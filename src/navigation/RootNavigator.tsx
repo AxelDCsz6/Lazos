@@ -8,7 +8,9 @@ import {
   Text,
   TouchableOpacity,
   FlatList,
+  Image,
 } from 'react-native';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../hooks/useAuth';
@@ -19,8 +21,16 @@ import { setupForegroundHandler, registerForPushNotifications } from '../service
 import { getSharedData, clearSharedData } from '../services/shareIntent';
 import { fetchLazos } from '../services/lazosService';
 import { sendMessage } from '../services/messages';
+import { uploadMedia } from '../services/mediaService';
 
 const Root = createNativeStackNavigator<RootStackParamList>();
+
+type ShareMedia = {
+  type: 'photo' | 'video';
+  path: string;
+  mime: string;
+  size: number;
+};
 
 const C = {
   bg: '#FDF6EE',
@@ -34,17 +44,30 @@ const C = {
   overlay: 'rgba(40,28,16,0.38)',
 };
 
+function basenameOf(path: string): string {
+  const idx = path.lastIndexOf('/');
+  return idx >= 0 ? path.substring(idx + 1) : path;
+}
+
 export function RootNavigator() {
   const { isAuthenticated, isLoading } = useAuth();
   const [shareText, setShareText] = useState<string | null>(null);
+  const [shareMedia, setShareMedia] = useState<ShareMedia | null>(null);
   const [lazos, setLazos] = useState<Array<{ id: string; partnerUsername: string }>>([]);
   const [sharing, setSharing] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = setupForegroundHandler((title, body) => {
-      Alert.alert(title, body);
-    });
-    return unsubscribe;
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = setupForegroundHandler((title, body) => {
+        Alert.alert(title, body);
+      });
+    } catch (err) {
+      console.warn('[RootNavigator] setupForegroundHandler failed:', err);
+    }
+    return () => {
+      try { unsubscribe?.(); } catch { /* noop */ }
+    };
   }, []);
 
   // Registrar token FCM una vez que el navegador está montado y la sesión está activa.
@@ -53,7 +76,7 @@ export function RootNavigator() {
     if (!isAuthenticated) { return; }
     const t = setTimeout(() => {
       registerForPushNotifications().catch(() => {});
-    }, 500);
+    }, 2000);
     return () => clearTimeout(t);
   }, [isAuthenticated]);
 
@@ -61,9 +84,24 @@ export function RootNavigator() {
   useEffect(() => {
     if (!isAuthenticated) { return; }
     getSharedData().then(data => {
-      if (data?.type === 'text' && data.data) {
+      if (!data) { return; }
+      if (data.type === 'text' && data.data) {
         setShareText(data.data);
         clearSharedData();
+        fetchLazos()
+          .then((raw: any[]) =>
+            setLazos(raw.map(l => ({ id: l.id, partnerUsername: l.partner_username })))
+          )
+          .catch(() => {});
+      } else if (data.type === 'photo' || data.type === 'video') {
+        setShareMedia({
+          type: data.type,
+          path: data.path,
+          mime: data.mime,
+          size: data.size,
+        });
+        // Nota: NO se llama clearSharedData aquí; se llama tras subir el archivo
+        // para no eliminar el archivo de cache antes de leerlo.
         fetchLazos()
           .then((raw: any[]) =>
             setLazos(raw.map(l => ({ id: l.id, partnerUsername: l.partner_username })))
@@ -73,14 +111,31 @@ export function RootNavigator() {
     });
   }, [isAuthenticated]);
 
+  const closeAndClear = () => {
+    setShareText(null);
+    setShareMedia(null);
+    try { clearSharedData(); } catch { /* noop */ }
+  };
+
   const handleShareToLazo = async (lazoId: string) => {
-    if (!shareText) { return; }
+    if (sharing) { return; }
     setSharing(true);
     try {
-      await sendMessage(lazoId, shareText);
-      setShareText(null);
+      if (shareText) {
+        await sendMessage(lazoId, shareText);
+        setShareText(null);
+      } else if (shareMedia) {
+        const asset = {
+          uri: 'file://' + shareMedia.path,
+          type: shareMedia.mime,
+          fileName: basenameOf(shareMedia.path),
+        };
+        await uploadMedia(lazoId, asset as any);
+        try { clearSharedData(); } catch { /* noop */ }
+        setShareMedia(null);
+      }
     } catch {
-      Alert.alert('Error', 'No se pudo enviar el mensaje');
+      Alert.alert('Error', 'No se pudo enviar el contenido');
     } finally {
       setSharing(false);
     }
@@ -93,6 +148,8 @@ export function RootNavigator() {
       </View>
     );
   }
+
+  const modalVisible = !!shareText || !!shareMedia;
 
   return (
     <>
@@ -108,14 +165,37 @@ export function RootNavigator() {
 
       {/* Share intent lazo picker */}
       <Modal
-        visible={!!shareText}
+        visible={modalVisible}
         transparent
         animationType="slide"
-        onRequestClose={() => setShareText(null)}>
+        onRequestClose={closeAndClear}>
         <View style={styles.overlay}>
           <View style={styles.sheet}>
             <Text style={styles.sheetTitle}>Enviar a un lazo</Text>
-            <Text style={styles.sheetPreview} numberOfLines={3}>{shareText}</Text>
+
+            {shareText ? (
+              <Text style={styles.sheetPreview} numberOfLines={3}>{shareText}</Text>
+            ) : null}
+
+            {shareMedia?.type === 'photo' ? (
+              <View style={styles.mediaPreviewWrap}>
+                <Image
+                  source={{ uri: 'file://' + shareMedia.path }}
+                  style={styles.imagePreview}
+                  resizeMode="cover"
+                />
+              </View>
+            ) : null}
+
+            {shareMedia?.type === 'video' ? (
+              <View style={styles.videoPreview}>
+                <Icon name="play-circle" size={42} color={C.green} />
+                <Text style={styles.videoName} numberOfLines={1}>
+                  {basenameOf(shareMedia.path)}
+                </Text>
+              </View>
+            ) : null}
+
             <FlatList
               data={lazos}
               keyExtractor={l => l.id}
@@ -131,7 +211,7 @@ export function RootNavigator() {
                 <Text style={styles.emptyText}>No tienes lazos activos</Text>
               }
             />
-            <TouchableOpacity style={styles.cancelBtn} onPress={() => setShareText(null)}>
+            <TouchableOpacity style={styles.cancelBtn} onPress={closeAndClear}>
               <Text style={styles.cancelText}>Cancelar</Text>
             </TouchableOpacity>
           </View>
@@ -172,6 +252,33 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
     borderRadius: 10,
     marginBottom: 12,
+  },
+  mediaPreviewWrap: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: C.beige,
+  },
+  imagePreview: {
+    width: '100%',
+    height: 180,
+  },
+  videoPreview: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: C.beige,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  videoName: {
+    marginLeft: 12,
+    fontSize: 14,
+    color: C.text,
+    flex: 1,
+    fontWeight: '600',
   },
   lazoRow: {
     paddingHorizontal: 20,

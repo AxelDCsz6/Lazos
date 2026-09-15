@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { db } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
+import { emitToLazo } from '../realtime';
 
 // ─── POST /api/lazos/:id/messages/:messageId/react ────────────
 // Toggle: si ya existe la reacción la elimina, si no la crea
@@ -53,6 +54,13 @@ export async function toggleReaction(req: AuthRequest, res: Response): Promise<v
     );
 
     res.json({ added, reactions: reactionsResult.rows });
+
+    // Realtime: notificar a la sala del lazo para que actualicen el mensaje
+    emitToLazo(lazoId, 'message:reaction', {
+      lazoId,
+      messageId,
+      reactions: reactionsResult.rows,
+    });
   } catch (err) {
     console.error('[reactions/toggle]', err);
     res.status(500).json({ message: 'Error procesando reacción' });

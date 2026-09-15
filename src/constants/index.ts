@@ -1,6 +1,10 @@
 // ─── API ──────────────────────────────────────────────────────────────────────
 export const API_BASE_URL = 'https://lazos.axeldchosting.org/api';
 
+// Socket.IO va montado en el root del mismo host (sin /api). Mantenemos un
+// constante propia para que sea trivial apuntar a otro entorno (staging, dev).
+export const SOCKET_BASE_URL = 'https://lazos.axeldchosting.org';
+
 export const API_TIMEOUT = 10000; // 10s
 
 // ─── Planta ───────────────────────────────────────────────────────────────────

@@ -37,6 +37,30 @@
             <category android:name="android.intent.category.DEFAULT" />
             <data android:mimeType="text/plain" />
         </intent-filter>
+        <!-- Compartir imágenes desde otras apps -->
+        <intent-filter>
+            <action android:name="android.intent.action.SEND" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="image/*" />
+        </intent-filter>
+        <!-- Compartir videos desde otras apps -->
+        <intent-filter>
+            <action android:name="android.intent.action.SEND" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="video/*" />
+        </intent-filter>
+        <!-- Compartir múltiples imágenes (MVP: solo se procesa la primera) -->
+        <intent-filter>
+            <action android:name="android.intent.action.SEND_MULTIPLE" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="image/*" />
+        </intent-filter>
+        <!-- Compartir múltiples videos (MVP: solo se procesa el primero) -->
+        <intent-filter>
+            <action android:name="android.intent.action.SEND_MULTIPLE" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="video/*" />
+        </intent-filter>
       </activity>
 
       <!-- Servicio FCM para recibir notificaciones en background -->

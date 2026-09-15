@@ -40,6 +40,7 @@ import {
   UNREAD_CHANGED,
 } from '../../services/unreadService';
 import { setActiveChatLazo } from '../../services/notificationService';
+import { joinLazos } from '../../services/realtimeService';
 import {
   pickFromCamera,
   pickFromGallery,
@@ -178,7 +179,11 @@ function WateringIndicator({
   holdAnim?: Animated.Value;
   label: string;
 }) {
-  const fillAnim = useRef(new Animated.Value(active ? 1 : 0)).current;
+  // Un único valor para el nivel de llenado (0 = vacío, 1 = lleno).
+  // Cuando active=false y se está regando, el padre escribe sobre holdAnim;
+  // un listener replica ese valor a levelAnim. Cuando active pasa a true,
+  // levelAnim se fija síncronamente a 1 para evitar el frame intermedio vacío.
+  const levelAnim = useRef(new Animated.Value(active ? 1 : 0)).current;
   const waveAnim = useRef(new Animated.Value(0)).current;
   const waveLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const prevActive = useRef(active);
@@ -202,25 +207,36 @@ function WateringIndicator({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Listener que replica holdAnim sobre levelAnim mientras active=false.
+  // Cuando active=true, no escuchamos: levelAnim queda fijo en 1.
+  useEffect(() => {
+    if (active || !holdAnim) { return; }
+    const id = holdAnim.addListener(({ value }) => {
+      levelAnim.setValue(value);
+    });
+    return () => { holdAnim.removeListener(id); };
+  }, [active, holdAnim, levelAnim]);
+
   // Reaccionar a cambios de active
   useEffect(() => {
     if (active === prevActive.current) { return; }
     prevActive.current = active;
     if (active) {
-      fillAnim.setValue(1);
+      // Fijamos a 1 de forma síncrona ANTES del próximo render para evitar
+      // el parpadeo vacío entre que termina la animación de holdAnim y se
+      // monta con active=true.
+      levelAnim.setValue(1);
       startWave();
     } else {
       waveLoopRef.current?.stop();
       waveAnim.setValue(0);
-      fillAnim.setValue(0);
+      levelAnim.setValue(0);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
-  // El agua sube desde abajo: la fuente es holdAnim durante el riego, fillAnim en reposo/completado
-  const sourceAnim = !active && holdAnim ? holdAnim : fillAnim;
   // outputRange empieza en INDICATOR_SIZE + 14 para que el contenedor quede completamente oculto al inicio
-  const translateY = sourceAnim.interpolate({
+  const translateY = levelAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [INDICATOR_SIZE + 14, 0],
   });
@@ -399,6 +415,23 @@ function WaterButton({
 
   useEffect(() => { return () => { animRef.current?.stop(); }; }, []);
 
+  // Cuando disabled pasa de false→true (el riego terminó en el padre),
+  // limpiamos cualquier animación pendiente y dejamos holdAnim en 1 para
+  // que el indicador "Tú" muestre lleno sin transición espuria.
+  const prevDisabledRef = useRef(disabled ?? false);
+  useEffect(() => {
+    const wasDisabled = prevDisabledRef.current;
+    const isDisabled = disabled ?? false;
+    if (!wasDisabled && isDisabled) {
+      animRef.current?.stop();
+      animRef.current = null;
+      holdAnimRef.current.setValue(1);
+      isNearRef.current = false;
+      setIsRaining(false);
+    }
+    prevDisabledRef.current = isDisabled;
+  }, [disabled]);
+
   return (
     <Animated.View
       style={{ transform: pan.getTranslateTransform() }}
@@ -536,6 +569,8 @@ function ChatModal({
 
     loadPage(1);
 
+    // Polling como fallback por si el socket está caído. Intervalo amplio
+    // (10s) porque el camino normal es el realtime más abajo.
     pollingRef.current = setInterval(async () => {
       try {
         const fresh = await fetchMessages(lazo.id, 1);
@@ -560,13 +595,53 @@ function ChatModal({
       } catch {
         // silent
       }
-    }, 3000);
+    }, 10000);
+
+    // Realtime: insertar mensajes nuevos al vuelo (dedupe por id).
+    const subMsg = DeviceEventEmitter.addListener('rt:message:new', (raw: any) => {
+      if (!raw || raw.lazo_id !== lazo.id) { return; }
+      const incoming: Message = {
+        id: raw.id,
+        lazoId: raw.lazo_id,
+        senderId: raw.sender_id,
+        content: raw.content,
+        type: raw.type,
+        status: raw.status,
+        createdAt: raw.created_at,
+        replyToId: raw.reply_to_id ?? undefined,
+        replyContent: raw.reply_content ?? undefined,
+        replySenderId: raw.reply_sender_id ?? undefined,
+        reactions: Array.isArray(raw.reactions)
+          ? raw.reactions.map((r: any) => ({ userId: r.userId ?? r.user_id, type: r.type }))
+          : [],
+        mediaUrl: raw.media_url ?? undefined,
+        mediaMime: raw.media_mime ?? undefined,
+        mediaWidth: raw.media_width ?? undefined,
+        mediaHeight: raw.media_height ?? undefined,
+        mediaDurationMs: raw.media_duration_ms ?? undefined,
+      };
+      setMessages(prev => {
+        if (prev.some(m => m.id === incoming.id)) { return prev; }
+        return [incoming, ...prev];
+      });
+    });
+
+    // Realtime: actualizar reacciones (con o sin nueva creación).
+    const subReact = DeviceEventEmitter.addListener('rt:message:reaction', (p: any) => {
+      if (!p || p.lazoId !== lazo.id) { return; }
+      const reactions = Array.isArray(p.reactions)
+        ? p.reactions.map((r: any) => ({ userId: r.userId ?? r.user_id, type: r.type }))
+        : [];
+      setMessages(prev => prev.map(m => m.id === p.messageId ? { ...m, reactions } : m));
+    });
 
     return () => {
       if (pollingRef.current) {
         clearInterval(pollingRef.current);
         pollingRef.current = null;
       }
+      subMsg.remove();
+      subReact.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, lazo?.id]);
@@ -1043,7 +1118,10 @@ function SideMenu({
   lazos,
   onSelectLazo,
   onNewLazo,
-  onDeleteLazo,
+  pendingDeleteIds,
+  onRequestDelete,
+  onUndoDelete,
+  deletedSnackbar,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -1051,23 +1129,27 @@ function SideMenu({
   lazos: Lazo[];
   onSelectLazo: (lazo: Lazo) => void;
   onNewLazo: () => void;
-  onDeleteLazo: (lazoId: string) => Promise<void>;
+  pendingDeleteIds: Set<string>;
+  onRequestDelete: (lazoId: string) => void;
+  onUndoDelete: (lazoId: string) => void;
+  deletedSnackbar: { lazoId: string; partnerUsername: string } | null;
 }) {
   const translateX = useRef(new Animated.Value(-SW * 0.78)).current;
 
   // ── Estado de edición (in-memory) ──
   const [editMode, setEditMode] = useState(false);
-  const [localLazos, setLocalLazos] = useState<Lazo[]>(lazos);
-  const [deletedLazo, setDeletedLazo] = useState<Lazo | null>(null);
+  // Edición cosmética/local de nombres (no persiste). Sólo guardamos overrides
+  // sobre los lazos del padre — el borrado se delega completamente.
+  const [nameOverrides, setNameOverrides] = useState<Record<string, string>>({});
   const [editingLazo, setEditingLazo] = useState<Lazo | null>(null);
   const [editName, setEditName] = useState('');
   const [lazosModalOpen, setLazosModalOpen] = useState(false);
-  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Sync when parent updates lazos
-  useEffect(() => {
-    setLocalLazos(lazos);
-  }, [lazos]);
+  // Lazos visibles: filtrar los marcados como pendientes de borrado por el padre
+  // y aplicar los overrides cosméticos de nombres.
+  const visibleLazos = lazos
+    .filter(l => !pendingDeleteIds.has(l.id))
+    .map(l => nameOverrides[l.id] ? { ...l, partnerUsername: nameOverrides[l.id] } : l);
 
   // ── Badges de no leídos ──
   const [unreadMap, setUnreadMap] = useState<Record<string, number>>({});
@@ -1088,33 +1170,13 @@ function SideMenu({
   }, []);
 
   // ── Handlers ──
-  const pendingDeleteRef = useRef<Lazo | null>(null);
-
   const handleDelete = (lazo: Lazo) => {
-    setLocalLazos(prev => prev.filter(l => l.id !== lazo.id));
-    setDeletedLazo(lazo);
-    pendingDeleteRef.current = lazo;
-    if (undoTimer.current) { clearTimeout(undoTimer.current); }
-    undoTimer.current = setTimeout(async () => {
-      const pending = pendingDeleteRef.current;
-      if (!pending) { return; }
-      setDeletedLazo(null);
-      pendingDeleteRef.current = null;
-      try {
-        await onDeleteLazo(pending.id);
-      } catch (err: any) {
-        setLocalLazos(prev => [...prev, pending]);
-        Alert.alert('Error', err.message ?? 'No se pudo eliminar el lazo');
-      }
-    }, 4000);
+    onRequestDelete(lazo.id);
   };
 
   const handleUndo = () => {
-    if (!deletedLazo) { return; }
-    setLocalLazos(prev => [...prev, deletedLazo]);
-    setDeletedLazo(null);
-    pendingDeleteRef.current = null;
-    if (undoTimer.current) { clearTimeout(undoTimer.current); }
+    if (!deletedSnackbar) { return; }
+    onUndoDelete(deletedSnackbar.lazoId);
   };
 
   const handleEditOpen = (lazo: Lazo) => {
@@ -1124,13 +1186,10 @@ function SideMenu({
 
   const handleEditSave = () => {
     if (!editingLazo) { return; }
-    setLocalLazos(prev =>
-      prev.map(l =>
-        l.id === editingLazo.id
-          ? { ...l, partnerUsername: editName.trim() || l.partnerUsername }
-          : l,
-      ),
-    );
+    const trimmed = editName.trim();
+    if (trimmed) {
+      setNameOverrides(prev => ({ ...prev, [editingLazo.id]: trimmed }));
+    }
     setEditingLazo(null);
   };
 
@@ -1164,7 +1223,7 @@ function SideMenu({
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.sideMenuUser}>{username ?? 'Usuario'}</Text>
-                  <Text style={styles.sideMenuSub}>{localLazos.length} lazos activos</Text>
+                  <Text style={styles.sideMenuSub}>{visibleLazos.length} lazos activos</Text>
                 </View>
                 <TouchableOpacity onPress={onClose}>
                   <Icon name="close" size={20} color={C.textSoft} />
@@ -1183,7 +1242,7 @@ function SideMenu({
 
               {/* Lista de lazos */}
               <FlatList
-                data={localLazos}
+                data={visibleLazos}
                 keyExtractor={i => i.id}
                 contentContainerStyle={{ paddingHorizontal: 16 }}
                 renderItem={({ item }) => {
@@ -1242,8 +1301,8 @@ function SideMenu({
                 <Text style={styles.newLazoBtnText}>Crear nuevo lazo</Text>
               </TouchableOpacity>
 
-              {/* Snackbar deshacer */}
-              {deletedLazo && (
+              {/* Snackbar deshacer (estado controlado por el padre) */}
+              {deletedSnackbar && (
                 <View style={styles.snackbar}>
                   <Text style={styles.snackbarText}>Lazo eliminado</Text>
                   <TouchableOpacity onPress={handleUndo} style={styles.snackbarBtn}>
@@ -1484,6 +1543,31 @@ export function LazosListScreen() {
 
   const holdAnim = useRef(new Animated.Value(0)).current;
 
+  // ── Borrado de lazos (pendientes 4s con opción "Deshacer") ──
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
+  const pendingDeleteIdsRef = useRef<Set<string>>(new Set());
+  const pendingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const pendingSnapshotsRef = useRef<Map<string, Lazo>>(new Map());
+  const [deletedSnackbar, setDeletedSnackbar] = useState<{ lazoId: string; partnerUsername: string } | null>(null);
+
+  // ── Badge de no leídos para el FAB "Chat" ──
+  const [unreadMap, setUnreadMap] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let mounted = true;
+    getAllUnread().then(m => { if (mounted) { setUnreadMap(m); } });
+    const sub = DeviceEventEmitter.addListener(
+      UNREAD_CHANGED,
+      ({ lazoId, count }: { lazoId: string; count: number }) => {
+        setUnreadMap(prev => {
+          const next = { ...prev };
+          if (count <= 0) { delete next[lazoId]; } else { next[lazoId] = count; }
+          return next;
+        });
+      },
+    );
+    return () => { mounted = false; sub.remove(); };
+  }, []);
+
   const loadLazos = useCallback(() => {
     fetchLazos()
       .then(raw => {
@@ -1498,12 +1582,18 @@ export function LazosListScreen() {
           partnerWateredToday: Boolean(l.partner_watered_today),
           daysWithoutMutual: Number(l.days_without_mutual ?? 0),
         }));
-        setLazos(mapped);
+        // Excluir los lazos marcados como "pendientes de borrar" para que no
+        // reaparezcan al refrescar dentro de la ventana de 4s.
+        const pending = pendingDeleteIdsRef.current;
+        const visible = pending.size > 0
+          ? mapped.filter(l => !pending.has(l.id))
+          : mapped;
+        setLazos(visible);
         setActiveLazo(prev => {
-          if (!prev) { return mapped.length > 0 ? mapped[0] : null; }
+          if (!prev) { return visible.length > 0 ? visible[0] : null; }
           // Actualizar activeLazo con datos frescos si sigue existiendo
-          const fresh = mapped.find(l => l.id === prev.id);
-          return fresh ?? (mapped.length > 0 ? mapped[0] : null);
+          const fresh = visible.find(l => l.id === prev.id);
+          return fresh ?? (visible.length > 0 ? visible[0] : null);
         });
       })
       .catch(() => {});
@@ -1527,14 +1617,142 @@ export function LazosListScreen() {
         Alert.alert('Lazo eliminado', `${deleterUsername} eliminó su lazo contigo`);
       },
     );
-    return () => { subRefresh.remove(); subDeleted.remove(); };
-  }, [loadLazos]);
 
-  // Eliminar lazo en backend (lo llama SideMenu tras el undo timer)
-  const handleDeleteLazo = useCallback(async (lazoId: string) => {
-    await deleteLazoRemote(lazoId);
-    loadLazos();
-  }, [loadLazos]);
+    // Socket.IO: riego del compañero / lazo creado / lazo borrado
+    const subRtWatering = DeviceEventEmitter.addListener(
+      'rt:watering',
+      (p: any) => {
+        if (!p || !p.lazoId) { return; }
+        const updater = (l: Lazo): Lazo => l.id === p.lazoId
+          ? {
+              ...l,
+              streak: Number(p.streak ?? l.streak),
+              plantPhase: p.plantPhase ?? l.plantPhase,
+              plantXp: Number(p.plantXp ?? l.plantXp),
+              // El payload viene desde la perspectiva del emisor: el usuario
+              // que regó es "wateredByUserId". Si soy yo, marca iWateredToday;
+              // si no, marca partnerWateredToday.
+              iWateredToday: String(p.wateredByUserId) === String(user?.id)
+                ? true : l.iWateredToday,
+              partnerWateredToday: String(p.wateredByUserId) !== String(user?.id)
+                ? true : l.partnerWateredToday,
+            }
+          : l;
+        setLazos(prev => prev.map(updater));
+        setActiveLazo(prev => prev ? updater(prev) : prev);
+      },
+    );
+    const subRtDeleted = DeviceEventEmitter.addListener(
+      'rt:lazo:deleted',
+      ({ deleterUsername }: { lazoId: string; deleterUsername: string }) => {
+        loadLazos();
+        Alert.alert('Lazo eliminado', `${deleterUsername} eliminó su lazo contigo`);
+      },
+    );
+    const subRtCreated = DeviceEventEmitter.addListener(
+      'rt:lazo:created',
+      () => { loadLazos(); },
+    );
+
+    return () => {
+      subRefresh.remove();
+      subDeleted.remove();
+      subRtWatering.remove();
+      subRtDeleted.remove();
+      subRtCreated.remove();
+    };
+  }, [loadLazos, user?.id]);
+
+  // Mantener al socket suscrito a las salas correspondientes. Re-emitimos el
+  // join cuando cambia el conjunto de ids (orden-insensible) para no spamear.
+  const lazoIdsHash = lazos.map(l => l.id).sort().join(',');
+  useEffect(() => {
+    const ids = lazoIdsHash ? lazoIdsHash.split(',') : [];
+    joinLazos(ids);
+  }, [lazoIdsHash]);
+
+  // ── Borrado de lazos: marcar como pendiente, programar DELETE en 4s ──
+  const markPendingDelete = useCallback((lazoId: string) => {
+    // Tomar snapshot del lazo para poder restaurarlo en caso de error / undo.
+    const snapshot = lazos.find(l => l.id === lazoId)
+      ?? (activeLazo?.id === lazoId ? activeLazo : undefined);
+    if (snapshot) { pendingSnapshotsRef.current.set(lazoId, snapshot); }
+
+    // Actualizar refs + state para que cualquier render / loadLazos lo oculte.
+    pendingDeleteIdsRef.current = new Set(pendingDeleteIdsRef.current).add(lazoId);
+    setPendingDeleteIds(new Set(pendingDeleteIdsRef.current));
+
+    // Mover activeLazo si era el que se está borrando.
+    setLazos(prev => {
+      const remaining = prev.filter(l => l.id !== lazoId);
+      setActiveLazo(curr => {
+        if (curr?.id !== lazoId) { return curr; }
+        return remaining.length > 0 ? remaining[0] : null;
+      });
+      return remaining;
+    });
+
+    // Snackbar
+    setDeletedSnackbar({
+      lazoId,
+      partnerUsername: snapshot?.partnerUsername ?? '',
+    });
+
+    // Timer 4s → confirmar borrado en backend
+    const existing = pendingTimersRef.current.get(lazoId);
+    if (existing) { clearTimeout(existing); }
+    const timer = setTimeout(async () => {
+      pendingTimersRef.current.delete(lazoId);
+      try {
+        await deleteLazoRemote(lazoId);
+      } catch (err: any) {
+        // Restaurar visualmente si falla el DELETE
+        const snap = pendingSnapshotsRef.current.get(lazoId);
+        pendingSnapshotsRef.current.delete(lazoId);
+        const nextSet = new Set(pendingDeleteIdsRef.current);
+        nextSet.delete(lazoId);
+        pendingDeleteIdsRef.current = nextSet;
+        setPendingDeleteIds(new Set(nextSet));
+        if (snap) {
+          setLazos(prev => prev.some(l => l.id === lazoId) ? prev : [...prev, snap]);
+        }
+        Alert.alert('Error', err?.message ?? 'No se pudo eliminar el lazo');
+        return;
+      }
+      // Éxito: quitar del set y snapshot, refrescar lista.
+      pendingSnapshotsRef.current.delete(lazoId);
+      const nextSet = new Set(pendingDeleteIdsRef.current);
+      nextSet.delete(lazoId);
+      pendingDeleteIdsRef.current = nextSet;
+      setPendingDeleteIds(new Set(nextSet));
+      setDeletedSnackbar(curr => curr?.lazoId === lazoId ? null : curr);
+      loadLazos();
+    }, 4000);
+    pendingTimersRef.current.set(lazoId, timer);
+  }, [lazos, activeLazo, loadLazos]);
+
+  const undoDelete = useCallback((lazoId: string) => {
+    const timer = pendingTimersRef.current.get(lazoId);
+    if (timer) { clearTimeout(timer); pendingTimersRef.current.delete(lazoId); }
+    const snap = pendingSnapshotsRef.current.get(lazoId);
+    pendingSnapshotsRef.current.delete(lazoId);
+    const nextSet = new Set(pendingDeleteIdsRef.current);
+    nextSet.delete(lazoId);
+    pendingDeleteIdsRef.current = nextSet;
+    setPendingDeleteIds(new Set(nextSet));
+    if (snap) {
+      setLazos(prev => prev.some(l => l.id === lazoId) ? prev : [...prev, snap]);
+    }
+    setDeletedSnackbar(curr => curr?.lazoId === lazoId ? null : curr);
+  }, []);
+
+  // Cleanup de timers al desmontar
+  useEffect(() => () => {
+    pendingTimersRef.current.forEach(t => clearTimeout(t));
+    pendingTimersRef.current.clear();
+  }, []);
+
+  const activeLazoUnread = activeLazo ? (unreadMap[activeLazo.id] ?? 0) : 0;
 
   const handleWater = useCallback(async () => {
     if (!activeLazo) { return; }
@@ -1636,13 +1854,20 @@ export function LazosListScreen() {
 
         {/* FABs */}
         <View style={styles.fabArea}>
-          <TouchableOpacity
-            style={[styles.fabChat, !activeLazo && { opacity: 0.5 }]}
-            onPress={() => activeLazo && setChatOpen(true)}
-            disabled={!activeLazo}>
-            <Icon name="chat-outline" size={16} color="#FFF" style={{ marginRight: 6 }} />
-            <Text style={styles.fabChatText}>Chat</Text>
-          </TouchableOpacity>
+          <View style={styles.fabChatWrap}>
+            <TouchableOpacity
+              style={[styles.fabChat, !activeLazo && { opacity: 0.5 }]}
+              onPress={() => activeLazo && setChatOpen(true)}
+              disabled={!activeLazo}>
+              <Icon name="chat-outline" size={16} color="#FFF" style={{ marginRight: 6 }} />
+              <Text style={styles.fabChatText}>Chat</Text>
+            </TouchableOpacity>
+            {activeLazoUnread > 0 && (
+              <View style={styles.fabChatBadge} pointerEvents="none">
+                <Text style={styles.fabChatBadgeText}>{formatUnreadBadge(activeLazoUnread)}</Text>
+              </View>
+            )}
+          </View>
           <WaterButton
             onWater={handleWater}
             plantZone={plantZone}
@@ -1660,7 +1885,10 @@ export function LazosListScreen() {
         lazos={lazos}
         onSelectLazo={lazo => setActiveLazo(lazo)}
         onNewLazo={() => setLazosModalOpen(true)}
-        onDeleteLazo={handleDeleteLazo}
+        pendingDeleteIds={pendingDeleteIds}
+        onRequestDelete={markPendingDelete}
+        onUndoDelete={undoDelete}
+        deletedSnackbar={deletedSnackbar}
       />
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <LazosModal visible={lazosModalOpen} onClose={() => setLazosModalOpen(false)} onLazoCreated={loadLazos} />
@@ -1712,6 +1940,7 @@ const styles = StyleSheet.create({
     position: 'absolute', bottom: 36, right: 24,
     alignItems: 'center', gap: 12,
   },
+  fabChatWrap: { position: 'relative', overflow: 'visible' },
   fabChat: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: C.green, borderRadius: 24,
@@ -1720,6 +1949,16 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35, shadowRadius: 8, elevation: 6,
   },
   fabChatText: { color: '#FFF', fontWeight: '600', fontSize: 14 },
+  fabChatBadge: {
+    position: 'absolute',
+    top: -6, right: -6,
+    minWidth: 20, height: 20,
+    paddingHorizontal: 6, borderRadius: 10,
+    backgroundColor: '#D9534F',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: C.bg,
+  },
+  fabChatBadgeText: { color: '#FFF', fontSize: 11, fontWeight: '700' },
   waterBtnInner: {
     width: WATER_BTN_SIZE, height: WATER_BTN_SIZE, borderRadius: WATER_BTN_SIZE / 2,
     backgroundColor: C.water, alignItems: 'center', justifyContent: 'center',
