@@ -313,6 +313,31 @@ export async function waterLazo(req: AuthRequest, res: Response): Promise<void> 
     // Notificar al compañero del riego (fire-and-forget)
     if (isFirstWateringToday) {
       notifyWatering(lazoId, userId, justStreaked).catch(() => {});
+
+      // Mensaje de sistema "<usuario> ha regado la planta" (fire-and-forget;
+      // si falla, no afecta la respuesta del riego).
+      (async () => {
+        try {
+          const userResult = await db.query(
+            'SELECT username FROM users WHERE id = $1',
+            [userId],
+          );
+          const username = userResult.rows[0]?.username ?? 'Alguien';
+          const content = `${username} ha regado la planta`;
+          const msgResult = await db.query(
+            `INSERT INTO messages (lazo_id, sender_id, content, type, status)
+             VALUES ($1, $2, $3, 'system', 'sent')
+             RETURNING id, lazo_id, sender_id, content, type, status,
+                       created_at, reply_to_id`,
+            [lazoId, userId, content],
+          );
+          const sysMsg = msgResult.rows[0];
+          sysMsg.reactions = [];
+          emitToLazo(lazoId, 'message:new', sysMsg);
+        } catch (err) {
+          console.error('[lazos/regar] Error insertando mensaje de sistema:', err);
+        }
+      })();
     }
   } catch (err) {
     console.error('[lazos/regar]', err);

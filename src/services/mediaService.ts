@@ -23,6 +23,9 @@ function mapMessage(m: any): Message {
     replyToId: m.reply_to_id ?? undefined,
     replyContent: m.reply_content ?? undefined,
     replySenderId: m.reply_sender_id ?? undefined,
+    replyType: m.reply_type ?? undefined,
+    replyMediaUrl: m.reply_media_url ?? undefined,
+    replyMediaMime: m.reply_media_mime ?? undefined,
     reactions: Array.isArray(m.reactions)
       ? (m.reactions as any[]).map(r => ({ userId: r.userId ?? r.user_id, type: r.type }))
       : [],
@@ -90,6 +93,10 @@ export async function uploadMedia(
     type: asset.type ?? 'application/octet-stream',
   } as any);
   if (replyToId) { form.append('reply_to_id', replyToId); }
+  // Dimensiones reales del asset para que el backend persista el aspect ratio
+  if (asset.width) { form.append('media_width', String(asset.width)); }
+  if (asset.height) { form.append('media_height', String(asset.height)); }
+  if (asset.duration) { form.append('media_duration_ms', String(Math.round(asset.duration))); }
 
   const res = await api.post(`/lazos/${lazoId}/messages/media`, form, {
     headers: { 'Content-Type': 'multipart/form-data' },

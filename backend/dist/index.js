@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const http_1 = __importDefault(require("http"));
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
@@ -13,6 +14,7 @@ const dailyReminderJob_1 = require("./jobs/dailyReminderJob");
 const database_1 = require("./config/database");
 const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
 const upload_1 = require("./middleware/upload");
+const realtime_1 = require("./realtime");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3000;
@@ -40,9 +42,11 @@ app.use((_req, res) => {
     res.status(404).json({ message: 'Ruta no encontrada' });
 });
 // ─── Arrancar ─────────────────────────────────────────────────
+const server = http_1.default.createServer(app);
+(0, realtime_1.initRealtime)(server);
 (0, database_1.connectDB)()
     .then(() => {
-    app.listen(PORT, () => {
+    server.listen(PORT, () => {
         console.warn(`🚀 Backend corriendo en http://localhost:${PORT}`);
         (0, cleanupCodes_1.startCleanupJob)();
         (0, streakJob_1.startStreakJob)();

@@ -10,6 +10,7 @@ exports.waterLazo = waterLazo;
 exports.deleteLazo = deleteLazo;
 const database_1 = require("../config/database");
 const notificationService_1 = require("../services/notificationService");
+const realtime_1 = require("../realtime");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 // ─── Helpers ──────────────────────────────────────────────────
@@ -110,7 +111,10 @@ async function joinLazo(req, res) {
         // Notificar al creador del código (fire-and-forget)
         const joinerResult = await database_1.db.query('SELECT username FROM users WHERE id = $1', [userId]);
         if (joinerResult.rows.length > 0) {
-            (0, notificationService_1.notifyLazoCreated)(invite.creator_id, joinerResult.rows[0].username, lazoId).catch(() => { });
+            const partnerUsername = joinerResult.rows[0].username;
+            (0, notificationService_1.notifyLazoCreated)(invite.creator_id, partnerUsername, lazoId).catch(() => { });
+            // Realtime: si el creador del código está conectado, avísalo al instante
+            (0, realtime_1.emitToUser)(invite.creator_id, 'lazo:created', { lazoId, partnerUsername });
         }
     }
     catch (err) {
@@ -249,9 +253,40 @@ async function waterLazo(req, res) {
             plantXp,
             justStreaked,
         });
+        // Realtime: avisar a la sala del lazo del nuevo estado de riego/planta.
+        // partnerWateredToday=true desde la perspectiva del otro usuario: él/ella
+        // ve que SU partner (el que acaba de regar) ya regó hoy.
+        (0, realtime_1.emitToLazo)(lazoId, 'watering:update', {
+            lazoId,
+            partnerWateredToday: true,
+            streak,
+            plantPhase,
+            plantXp,
+            justStreaked,
+            wateredByUserId: String(userId),
+        });
         // Notificar al compañero del riego (fire-and-forget)
         if (isFirstWateringToday) {
             (0, notificationService_1.notifyWatering)(lazoId, userId, justStreaked).catch(() => { });
+            // Mensaje de sistema "<usuario> ha regado la planta" (fire-and-forget;
+            // si falla, no afecta la respuesta del riego).
+            (async () => {
+                try {
+                    const userResult = await database_1.db.query('SELECT username FROM users WHERE id = $1', [userId]);
+                    const username = userResult.rows[0]?.username ?? 'Alguien';
+                    const content = `${username} ha regado la planta`;
+                    const msgResult = await database_1.db.query(`INSERT INTO messages (lazo_id, sender_id, content, type, status)
+             VALUES ($1, $2, $3, 'system', 'sent')
+             RETURNING id, lazo_id, sender_id, content, type, status,
+                       created_at, reply_to_id`, [lazoId, userId, content]);
+                    const sysMsg = msgResult.rows[0];
+                    sysMsg.reactions = [];
+                    (0, realtime_1.emitToLazo)(lazoId, 'message:new', sysMsg);
+                }
+                catch (err) {
+                    console.error('[lazos/regar] Error insertando mensaje de sistema:', err);
+                }
+            })();
         }
     }
     catch (err) {
@@ -289,6 +324,8 @@ async function deleteLazo(req, res) {
             }
         }
         catch { /* silencioso */ }
+        // Realtime: avisar al partner instantáneamente si está conectado
+        (0, realtime_1.emitToUser)(partnerId, 'lazo:deleted', { lazoId, deleterUsername: deleter_username });
         // Notificar al partner (fire-and-forget)
         (0, notificationService_1.notifyLazoDeleted)(partnerId, deleter_username, lazoId).catch(() => { });
     }

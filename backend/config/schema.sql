@@ -48,7 +48,7 @@ CREATE TABLE messages (
   sender_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   content      TEXT        NOT NULL DEFAULT '',
   type         VARCHAR(10) NOT NULL DEFAULT 'text'
-               CHECK (type IN ('text', 'photo', 'video')),
+               CHECK (type IN ('text', 'photo', 'video', 'system')),
   status       VARCHAR(10) NOT NULL DEFAULT 'sent'
                CHECK (status IN ('sent', 'delivered')),
   reply_to_id  UUID        REFERENCES messages(id) ON DELETE SET NULL,

@@ -6,6 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Lazos** is a mobile app for tracking relationships between two users via a shared virtual plant ("lazo"). Users grow their plant by chatting and interacting daily. Built as a monorepo with a React Native frontend and Node.js/Express backend.
 
+## Current Work Plan (READ FIRST)
+
+`plan.md` contiene el plan de trabajo activo (12 tareas) con diagnósticos, referencias `archivo:línea` y pasos detallados. Cualquier sesión debe:
+
+1. Leer `plan.md` completo ANTES de tocar código y ejecutar las tareas en orden (Fase A → B → C).
+2. Correr la verificación obligatoria por tarea: `npx tsc --noEmit`, `npm test`, `npm run lint` (+ `cd backend && npm run build` si se tocó backend).
+3. NO hacer `git commit`, `git push` ni ejecutar `./deploy-backend.sh` sin permiso explícito del usuario. Las migraciones SQL se aplican manualmente (ver sección 2 de plan.md).
+4. Al completar una tarea, marcarla en `plan.md` (cambiar `-` por `x` en la lista original).
+
+Nota: las secciones "REQUERIMIENTOS DE PROYECTO" y sprints de este archivo son histórico/contexto; ante conflicto con `plan.md`, gana `plan.md`.
+
 ## Commands
 
 ### Frontend (React Native)

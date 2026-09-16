@@ -106,7 +106,7 @@ export function LazosModal({ visible, onClose, onLazoCreated }: Props) {
     try {
       const { code } = await generateInviteCode();
       setGeneratedCode(code);
-    } catch (err: any) {
+    } catch {
       // Si no hay backend aún, mostrar código de demostración
       const demoCode = ['abcd', 'ef12', '34gh']
         .map(() => Math.random().toString(36).slice(2, 6))

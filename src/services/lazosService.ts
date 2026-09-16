@@ -48,7 +48,12 @@ export async function deleteLazoRemote(lazoId: string): Promise<void> {
     headers: await authHeaders(),
   });
   const data = await res.json() as { message?: string };
-  if (!res.ok) { throw new Error(data.message ?? 'Error al eliminar lazo'); }
+  if (!res.ok) {
+    // status permite al outbox de borrados tratar 404 como éxito.
+    throw Object.assign(new Error(data.message ?? 'Error al eliminar lazo'), {
+      status: res.status,
+    });
+  }
 }
 
 // ─── Regar la planta de un lazo ───────────────────────────────

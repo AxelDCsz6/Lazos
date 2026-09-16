@@ -44,10 +44,18 @@ async function sendToToken(token, title, body, data) {
         return;
     }
     try {
+        // Payload mixto: notification para que Android la pinte automáticamente,
+        // y data (incluyendo title/body) para que el background handler de RN
+        // siempre reciba el contenido completo aunque el sistema agrupe la notif.
+        const mergedData = {
+            ...(data ?? {}),
+            title,
+            body,
+        };
         const messageId = await firebase_admin_1.default.messaging().send({
             token,
             notification: { title, body },
-            data,
+            data: mergedData,
             android: {
                 notification: {
                     channelId: 'lazos_default',

@@ -62,6 +62,6 @@ export async function clearUnread(lazoId: string): Promise<void> {
 
 export function formatUnreadBadge(n: number): string {
   if (n <= 0) { return ''; }
-  if (n > 9) { return '+9'; }
+  if (n > 9) { return '9+'; }
   return String(n);
 }

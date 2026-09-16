@@ -50,6 +50,9 @@ export async function getMessages(req: AuthRequest, res: Response): Promise<void
          m.media_duration_ms,
          r.content   AS reply_content,
          r.sender_id AS reply_sender_id,
+         r.type      AS reply_type,
+         r.media_url AS reply_media_url,
+         r.media_mime AS reply_media_mime,
          COALESCE(
            (SELECT json_agg(json_build_object('userId', rx.user_id, 'type', rx.type))
             FROM reactions rx
@@ -115,12 +118,15 @@ export async function sendMessage(req: AuthRequest, res: Response): Promise<void
     // Fetch reply content if present
     if (msg.reply_to_id) {
       const replyResult = await db.query(
-        `SELECT content, sender_id FROM messages WHERE id = $1`,
+        `SELECT content, sender_id, type, media_url, media_mime FROM messages WHERE id = $1`,
         [msg.reply_to_id],
       );
       if (replyResult.rows.length > 0) {
         msg.reply_content = replyResult.rows[0].content;
         msg.reply_sender_id = replyResult.rows[0].sender_id;
+        msg.reply_type = replyResult.rows[0].type;
+        msg.reply_media_url = replyResult.rows[0].media_url;
+        msg.reply_media_mime = replyResult.rows[0].media_mime;
       }
     }
 
@@ -202,27 +208,40 @@ export async function sendMediaMessage(req: AuthRequest, res: Response): Promise
     // URL relativa que el cliente compondrá con API_BASE_URL
     const mediaUrl = `/media/${lazoId}/${file.filename}`;
 
+    // Dimensiones/duración opcionales (llegan como strings en multipart)
+    const toPositiveInt = (v: unknown): number | null => {
+      const n = parseInt(String(v ?? ''), 10);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
+    const mediaWidth = toPositiveInt(req.body?.media_width);
+    const mediaHeight = toPositiveInt(req.body?.media_height);
+    const mediaDurationMs = toPositiveInt(req.body?.media_duration_ms);
+
     const result = await db.query(
       `INSERT INTO messages
          (lazo_id, sender_id, content, type, status, reply_to_id,
-          media_url, media_mime, media_size)
-       VALUES ($1, $2, '', $3, 'sent', $4, $5, $6, $7)
+          media_url, media_mime, media_size, media_width, media_height, media_duration_ms)
+       VALUES ($1, $2, '', $3, 'sent', $4, $5, $6, $7, $8, $9, $10)
        RETURNING id, lazo_id, sender_id, content, type, status, created_at,
                  reply_to_id, media_url, media_mime, media_width, media_height,
                  media_duration_ms`,
-      [lazoId, userId, type, replyToId, mediaUrl, file.mimetype, file.size],
+      [lazoId, userId, type, replyToId, mediaUrl, file.mimetype, file.size,
+       mediaWidth, mediaHeight, mediaDurationMs],
     );
 
     const msg = result.rows[0];
 
     if (msg.reply_to_id) {
       const replyResult = await db.query(
-        `SELECT content, sender_id FROM messages WHERE id = $1`,
+        `SELECT content, sender_id, type, media_url, media_mime FROM messages WHERE id = $1`,
         [msg.reply_to_id],
       );
       if (replyResult.rows.length > 0) {
         msg.reply_content = replyResult.rows[0].content;
         msg.reply_sender_id = replyResult.rows[0].sender_id;
+        msg.reply_type = replyResult.rows[0].type;
+        msg.reply_media_url = replyResult.rows[0].media_url;
+        msg.reply_media_mime = replyResult.rows[0].media_mime;
       }
     }
 

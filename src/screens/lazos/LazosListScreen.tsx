@@ -28,6 +28,12 @@ import { AnimatedPlant } from '../../components/AnimatedPlant';
 import { ChatInput } from '../../components/ChatInput';
 import { fetchLazos, waterLazo as waterLazoApi, deleteLazoRemote } from '../../services/lazosService';
 import {
+  getPendingDeletes,
+  addPendingDelete,
+  removePendingDelete,
+  flushPendingDeletes,
+} from '../../services/pendingDeletesService';
+import {
   getMessages as fetchMessages,
   sendMessage as apiSendMessage,
   toggleReaction as apiToggleReaction,
@@ -35,11 +41,12 @@ import {
 import { Message } from '../../types';
 import {
   getAllUnread,
+  incrementUnread,
   clearUnread,
   formatUnreadBadge,
   UNREAD_CHANGED,
 } from '../../services/unreadService';
-import { setActiveChatLazo } from '../../services/notificationService';
+import { setActiveChatLazo, getActiveChatLazo } from '../../services/notificationService';
 import { joinLazos } from '../../services/realtimeService';
 import {
   pickFromCamera,
@@ -49,6 +56,7 @@ import {
 } from '../../services/mediaService';
 import ImageViewing from 'react-native-image-viewing';
 import Video from 'react-native-video';
+import { formatChatDateSeparator, isSameCalendarDay } from '../../utils/dateFormat';
 
 const { width: SW, height: SH } = Dimensions.get('window');
 
@@ -90,6 +98,7 @@ const PHASE_LABEL: Record<string, string> = {
   dead:   'Planta muerta',
 };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const PHASE_EMOJI: Record<string, string> = {
   seed:   '🌱',
   sprout: '🪴',
@@ -98,6 +107,13 @@ const PHASE_EMOJI: Record<string, string> = {
   flower: '🌸',
   dead:   '🥀',
 };
+
+// ─── Etiqueta de cita de reply: "Foto"/"Video" para media, contenido para texto ──
+function replyQuoteLabel(msg: Message): string {
+  if (msg.replyType === 'photo') { return 'Foto'; }
+  if (msg.replyType === 'video') { return 'Video'; }
+  return msg.replyContent ?? '';
+}
 
 // ─── Dimensiones del botón de regar ──────────────────────────
 const WATER_BTN_SIZE = 52;
@@ -372,6 +388,9 @@ function WaterButton({
         completedRef.current = false;
       },
       onPanResponderMove: (_, gs) => {
+        // Tras completar el riego, ignorar micro-movimientos: el botón ya está
+        // en su spring de retorno y NO debe re-arrastrarse bajo el dedo.
+        if (completedRef.current) { return; }
         (pan.x as any).setValue(gs.dx);
         (pan.y as any).setValue(gs.dy);
         const near = isNearPlant(
@@ -389,13 +408,16 @@ function WaterButton({
         }
       },
       onPanResponderRelease: () => {
-        // Si el riego ya completó, el callback de completion ya hizo flattenOffset
-        // y disparó el spring de retorno. Salir para no duplicar animaciones.
-        if (completedRef.current) { return; }
+        // Limpieza idempotente: SIEMPRE devolver el botón al origen, incluso
+        // si el riego ya completó (el completion callback ya hizo flattenOffset
+        // y disparó su spring, pero repetirlo es inofensivo y garantiza que
+        // el botón nunca quede atascado lejos del origen).
         pan.flattenOffset();
         isNearRef.current = false;
         setIsRaining(false);
-        resetFill();
+        if (!completedRef.current) {
+          resetFill();
+        }
         returnToOrigin();
       },
       onPanResponderTerminate: () => {
@@ -428,9 +450,11 @@ function WaterButton({
       holdAnimRef.current.setValue(1);
       isNearRef.current = false;
       setIsRaining(false);
+      // Red de seguridad: forzar posición de origen al quedar deshabilitado.
+      pan.setValue({ x: 0, y: 0 });
     }
     prevDisabledRef.current = isDisabled;
-  }, [disabled]);
+  }, [disabled, pan]);
 
   return (
     <Animated.View
@@ -527,6 +551,8 @@ function ChatModal({
   const tapTimestamps = useRef<Map<string, number>>(new Map()).current;
   // Swipeable refs: messageId -> Swipeable instance for instant close
   const swipeableRefs = useRef<Map<string, Swipeable>>(new Map()).current;
+  // Ref al TextInput del ChatInput para enfocarlo programáticamente (swipe-reply)
+  const inputRef = useRef<TextInput>(null);
 
   // ── Fetch helpers ──
   const loadPage = useCallback(
@@ -611,6 +637,9 @@ function ChatModal({
         replyToId: raw.reply_to_id ?? undefined,
         replyContent: raw.reply_content ?? undefined,
         replySenderId: raw.reply_sender_id ?? undefined,
+        replyType: raw.reply_type ?? undefined,
+        replyMediaUrl: raw.reply_media_url ?? undefined,
+        replyMediaMime: raw.reply_media_mime ?? undefined,
         reactions: Array.isArray(raw.reactions)
           ? raw.reactions.map((r: any) => ({ userId: r.userId ?? r.user_id, type: r.type }))
           : [],
@@ -678,6 +707,9 @@ function ChatModal({
       replyToId: replyId,
       replyContent: replyTarget?.content,
       replySenderId: replyTarget?.senderId,
+      replyType: replyTarget?.type,
+      replyMediaUrl: replyTarget?.mediaUrl,
+      replyMediaMime: replyTarget?.mediaMime,
       reactions: [],
     };
     setMessages(prev => [optimistic, ...prev]);
@@ -725,6 +757,9 @@ function ChatModal({
       replyToId: replyId,
       replyContent: replyTarget?.content,
       replySenderId: replyTarget?.senderId,
+      replyType: replyTarget?.type,
+      replyMediaUrl: replyTarget?.mediaUrl,
+      replyMediaMime: replyTarget?.mediaMime,
       reactions: [],
       mediaUrl: asset.uri,
       mediaMime: asset.type,
@@ -905,14 +940,46 @@ function ChatModal({
               onEndReached={handleEndReached}
               onEndReachedThreshold={0.3}
               ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
-              renderItem={({ item }) => {
+              renderItem={({ item, index }) => {
                 const mine = item.senderId === user?.id;
                 const heartCount = (item.reactions ?? []).filter(r => r.type === 'heart').length;
                 const iReacted = (item.reactions ?? []).some(r => r.userId === user?.id && r.type === 'heart');
                 const heartAnim = heartAnims.get(item.id);
+                // Separador de día: al último mensaje (más antiguo) o cuando el
+                // mensaje cronológicamente anterior (index+1, lista invertida y
+                // ordenada descendente) es de otro día.
+                const showDaySeparator =
+                  index === messages.length - 1 ||
+                  !isSameCalendarDay(messages[index + 1].createdAt, item.createdAt);
+
+                // Mensaje de sistema (riego, avisos de racha): pill centrado
+                // sin burbuja, sin swipe, sin reacciones.
+                if (item.type === 'system') {
+                  return (
+                    <View>
+                      {showDaySeparator && (
+                        <View style={styles.daySeparator}>
+                          <Text style={styles.daySeparatorText}>
+                            {formatChatDateSeparator(item.createdAt)}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.systemMessage}>
+                        <Text style={styles.systemMessageText}>{item.content}</Text>
+                      </View>
+                    </View>
+                  );
+                }
 
                 return (
                   <View style={{ overflow: 'visible', marginBottom: heartCount > 0 ? 12 : 0 }}>
+                    {showDaySeparator && (
+                      <View style={styles.daySeparator}>
+                        <Text style={styles.daySeparatorText}>
+                          {formatChatDateSeparator(item.createdAt)}
+                        </Text>
+                      </View>
+                    )}
                     <Swipeable
                       ref={ref => {
                         if (ref) { swipeableRefs.set(item.id, ref); }
@@ -927,6 +994,8 @@ function ChatModal({
                         if (direction === 'left') {
                           setReplyTarget(item);
                           swipeableRefs.get(item.id)?.close();
+                          handleFocusExpand();
+                          inputRef.current?.focus();
                         }
                       }}
                       overshootFriction={8}
@@ -950,17 +1019,37 @@ function ChatModal({
                           (item.type === 'photo' || item.type === 'video') && styles.bubbleMedia,
                         ]}>
                           {/* Reply quote */}
-                          {item.replyToId && item.replyContent && (
+                          {item.replyToId && (item.replyContent || item.replyType) && (
                             <TouchableOpacity
-                              style={[styles.replyQuote, mine && styles.replyQuoteMine]}
+                              style={[
+                                styles.replyQuote,
+                                mine && styles.replyQuoteMine,
+                                (item.replyType === 'photo' || item.replyType === 'video') && styles.replyQuoteMedia,
+                              ]}
                               onPress={() => {
                                 const idx = idToIndexRef.current.get(item.replyToId!);
                                 if (idx !== undefined) {
                                   flatListRef.current?.scrollToIndex({ index: idx, animated: true });
                                 }
                               }}>
+                              {item.replyType === 'photo' && item.replyMediaUrl && (
+                                <Image
+                                  source={{ uri: resolveMediaUrl(item.replyMediaUrl) }}
+                                  style={styles.replyQuoteThumb}
+                                  resizeMode="cover"
+                                />
+                              )}
+                              {item.replyType === 'video' && (
+                                <View style={[styles.replyQuoteThumb, styles.replyQuoteVideoThumb]}>
+                                  <Icon
+                                    name="play-circle"
+                                    size={18}
+                                    color={mine ? 'rgba(255,255,255,0.9)' : C.textSoft}
+                                  />
+                                </View>
+                              )}
                               <Text style={[styles.replyQuoteText, mine && styles.replyQuoteTextMine]} numberOfLines={2}>
-                                {item.replyContent}
+                                {replyQuoteLabel(item)}
                               </Text>
                             </TouchableOpacity>
                           )}
@@ -1054,7 +1143,21 @@ function ChatModal({
             {replyTarget && (
               <View style={styles.replyPreview}>
                 <View style={styles.replyPreviewBar} />
-                <Text style={styles.replyPreviewText} numberOfLines={1}>{replyTarget.content}</Text>
+                {replyTarget.type === 'photo' && replyTarget.mediaUrl && (
+                  <Image
+                    source={{ uri: resolveMediaUrl(replyTarget.mediaUrl) }}
+                    style={styles.replyPreviewThumb}
+                    resizeMode="cover"
+                  />
+                )}
+                {replyTarget.type === 'video' && (
+                  <View style={[styles.replyPreviewThumb, styles.replyQuoteVideoThumb]}>
+                    <Icon name="play-circle" size={18} color={C.textSoft} />
+                  </View>
+                )}
+                <Text style={styles.replyPreviewText} numberOfLines={1}>
+                  {replyQuoteLabel(replyTarget)}
+                </Text>
                 <TouchableOpacity onPress={() => setReplyTarget(null)} style={styles.replyPreviewClose}>
                   <Icon name="close" size={18} color={C.textSoft} />
                 </TouchableOpacity>
@@ -1067,6 +1170,7 @@ function ChatModal({
               onFocusExpand={handleFocusExpand}
               onPickFromCamera={handlePickCamera}
               onPickFromGallery={handlePickGallery}
+              inputRef={inputRef}
             />
 
           </View>
@@ -1569,7 +1673,17 @@ export function LazosListScreen() {
   }, []);
 
   const loadLazos = useCallback(() => {
-    fetchLazos()
+    // Aplicar el filtro de borrados pendientes (outbox) antes de mostrar la
+    // lista para que un lazo pendiente no parpadee al arrancar.
+    getPendingDeletes()
+      .then(pending => {
+      if (pending.length > 0) {
+        const next = new Set(pendingDeleteIdsRef.current);
+        pending.forEach(id => next.add(id));
+        pendingDeleteIdsRef.current = next;
+      }
+      return fetchLazos();
+    })
       .then(raw => {
         const mapped: Lazo[] = raw.map((l: any) => ({
           id: l.id,
@@ -1600,6 +1714,28 @@ export function LazosListScreen() {
   }, []);
 
   useEffect(() => { loadLazos(); }, [loadLazos]);
+
+  // ── Outbox de borrados: ejecutar DELETEs que quedaron pendientes porque
+  // la app se cerró dentro de la ventana de "Deshacer" (4s) ──
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const pending = await getPendingDeletes();
+      if (!mounted || pending.length === 0) { return; }
+      // Filtrar visualmente mientras corre el flush
+      const next = new Set(pendingDeleteIdsRef.current);
+      pending.forEach(id => next.add(id));
+      pendingDeleteIdsRef.current = next;
+      setPendingDeleteIds(new Set(next));
+      await flushPendingDeletes();
+      if (!mounted) { return; }
+      const remaining = new Set(await getPendingDeletes());
+      pendingDeleteIdsRef.current = remaining;
+      setPendingDeleteIds(new Set(remaining));
+      loadLazos();
+    })();
+    return () => { mounted = false; };
+  }, [loadLazos]);
 
   // Refrescar al volver a la pantalla (fallback cuando FCM falla)
   useFocusEffect(useCallback(() => { loadLazos(); }, [loadLazos]));
@@ -1654,12 +1790,31 @@ export function LazosListScreen() {
       () => { loadLazos(); },
     );
 
+    // Mensajes nuevos vía socket con la app abierta y el chat cerrado:
+    // incrementar el badge de no leídos del lazo. Los mensajes propios no
+    // cuentan, ni los del chat que esté abierto en pantalla.
+    // Nota: si en el futuro FCM foreground llegara a dispararse junto con el
+    // socket para el mismo mensaje habría doble conteo; hoy FCM foreground
+    // está inactivo (ver C1), así que el socket es la única fuente.
+    // Los mensajes de sistema (riego, avisos) no incrementan no leídos.
+    const subRtMessage = DeviceEventEmitter.addListener(
+      'rt:message:new',
+      (raw: any) => {
+        if (!raw || typeof raw.lazo_id !== 'string') { return; }
+        if (raw.type === 'system') { return; }
+        if (String(raw.sender_id ?? '') === String(user?.id ?? '')) { return; }
+        if (getActiveChatLazo() === raw.lazo_id) { return; }
+        incrementUnread(raw.lazo_id).catch(() => {});
+      },
+    );
+
     return () => {
       subRefresh.remove();
       subDeleted.remove();
       subRtWatering.remove();
       subRtDeleted.remove();
       subRtCreated.remove();
+      subRtMessage.remove();
     };
   }, [loadLazos, user?.id]);
 
@@ -1698,6 +1853,10 @@ export function LazosListScreen() {
       partnerUsername: snapshot?.partnerUsername ?? '',
     });
 
+    // Outbox: persistir el borrado ANTES de programar el timer, para que
+    // sobreviva si la app muere dentro de la ventana de 4s.
+    addPendingDelete(lazoId).catch(() => {});
+
     // Timer 4s → confirmar borrado en backend
     const existing = pendingTimersRef.current.get(lazoId);
     if (existing) { clearTimeout(existing); }
@@ -1707,6 +1866,7 @@ export function LazosListScreen() {
         await deleteLazoRemote(lazoId);
       } catch (err: any) {
         // Restaurar visualmente si falla el DELETE
+        removePendingDelete(lazoId).catch(() => {});
         const snap = pendingSnapshotsRef.current.get(lazoId);
         pendingSnapshotsRef.current.delete(lazoId);
         const nextSet = new Set(pendingDeleteIdsRef.current);
@@ -1719,7 +1879,8 @@ export function LazosListScreen() {
         Alert.alert('Error', err?.message ?? 'No se pudo eliminar el lazo');
         return;
       }
-      // Éxito: quitar del set y snapshot, refrescar lista.
+      // Éxito: quitar del set y outbox, refrescar lista.
+      removePendingDelete(lazoId).catch(() => {});
       pendingSnapshotsRef.current.delete(lazoId);
       const nextSet = new Set(pendingDeleteIdsRef.current);
       nextSet.delete(lazoId);
@@ -1734,6 +1895,7 @@ export function LazosListScreen() {
   const undoDelete = useCallback((lazoId: string) => {
     const timer = pendingTimersRef.current.get(lazoId);
     if (timer) { clearTimeout(timer); pendingTimersRef.current.delete(lazoId); }
+    removePendingDelete(lazoId).catch(() => {});
     const snap = pendingSnapshotsRef.current.get(lazoId);
     pendingSnapshotsRef.current.delete(lazoId);
     const nextSet = new Set(pendingDeleteIdsRef.current);
@@ -1821,6 +1983,22 @@ export function LazosListScreen() {
               <View style={styles.warningBadge}>
                 <Text style={styles.warningText}>
                   ⚠️ {activeLazo.daysWithoutMutual} día{activeLazo.daysWithoutMutual !== 1 ? 's' : ''} sin regar juntos
+                </Text>
+              </View>
+            )}
+
+            {/* Planta muerta: flujo de revivir (mismo riego, mismo endpoint) */}
+            {activeLazo && activeLazo.plantPhase === 'dead' && !activeLazo.iWateredToday && (
+              <View style={[styles.warningBadge, styles.deadBadge]}>
+                <Text style={[styles.warningText, styles.deadBadgeText]}>
+                  🥀 Tu planta murió — ¡Revívela! Arrastra la gota para regar
+                </Text>
+              </View>
+            )}
+            {activeLazo && activeLazo.plantPhase === 'dead' && activeLazo.iWateredToday && !activeLazo.partnerWateredToday && (
+              <View style={[styles.warningBadge, styles.deadBadge]}>
+                <Text style={[styles.warningText, styles.deadBadgeText]}>
+                  Ya regaste. Cuando {activeLazo.partnerUsername} también riegue, la planta revivirá 🌱
                 </Text>
               </View>
             )}
@@ -1977,6 +2155,10 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   warningText: { fontSize: 12, color: '#856404', fontWeight: '500' },
+  deadBadge: {
+    backgroundColor: '#F8D7DA',
+  },
+  deadBadgeText: { color: '#721C24' },
   wateringRow: {
     flexDirection: 'row', gap: 24, marginTop: 14,
   },
@@ -2128,6 +2310,36 @@ const styles = StyleSheet.create({
     paddingLeft: 12,
   },
 
+  // ── Separador de día (chat) ──
+  daySeparator: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 3,
+    marginBottom: 6,
+  },
+  daySeparatorText: {
+    fontSize: 11,
+    color: C.textSoft,
+    fontWeight: '600',
+  },
+
+  // ── Mensaje de sistema (riego, avisos) ──
+  systemMessage: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  systemMessageText: {
+    fontSize: 12,
+    fontStyle: 'italic',
+    color: C.textSoft,
+    textAlign: 'center',
+  },
+
   // ── Reply quote inside bubble ──
   replyQuote: {
     borderLeftWidth: 3, borderLeftColor: 'rgba(255,255,255,0.6)',
@@ -2141,6 +2353,22 @@ const styles = StyleSheet.create({
   },
   replyQuoteText: { fontSize: 12, color: C.textSoft },
   replyQuoteTextMine: { color: 'rgba(255,255,255,0.85)' },
+  replyQuoteMedia: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+  },
+  replyQuoteThumb: {
+    width: 40,
+    height: 40,
+    borderRadius: 6,
+    marginRight: 8,
+    backgroundColor: 'rgba(0,0,0,0.15)',
+  },
+  replyQuoteVideoThumb: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // ── Reply preview bar (above input) ──
   replyPreview: {
@@ -2154,6 +2382,12 @@ const styles = StyleSheet.create({
     backgroundColor: C.green, alignSelf: 'stretch', minHeight: 16,
   },
   replyPreviewText: { flex: 1, fontSize: 13, color: C.textSoft },
+  replyPreviewThumb: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: 'rgba(0,0,0,0.1)',
+  },
   replyPreviewClose: { padding: 4 },
 
   // ── Heart reaction badge ──

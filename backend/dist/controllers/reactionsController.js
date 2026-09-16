@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.toggleReaction = toggleReaction;
 const database_1 = require("../config/database");
+const realtime_1 = require("../realtime");
 // ─── POST /api/lazos/:id/messages/:messageId/react ────────────
 // Toggle: si ya existe la reacción la elimina, si no la crea
 async function toggleReaction(req, res) {
@@ -36,6 +37,12 @@ async function toggleReaction(req, res) {
         // Return updated reactions for this message
         const reactionsResult = await database_1.db.query(`SELECT user_id AS "userId", type FROM reactions WHERE message_id = $1`, [messageId]);
         res.json({ added, reactions: reactionsResult.rows });
+        // Realtime: notificar a la sala del lazo para que actualicen el mensaje
+        (0, realtime_1.emitToLazo)(lazoId, 'message:reaction', {
+            lazoId,
+            messageId,
+            reactions: reactionsResult.rows,
+        });
     }
     catch (err) {
         console.error('[reactions/toggle]', err);

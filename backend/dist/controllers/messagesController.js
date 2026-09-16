@@ -10,6 +10,7 @@ const fs_1 = __importDefault(require("fs"));
 const database_1 = require("../config/database");
 const notificationService_1 = require("../services/notificationService");
 const upload_1 = require("../middleware/upload");
+const realtime_1 = require("../realtime");
 // ─── Helper: verifica que el usuario pertenece al lazo ────────
 async function checkLazoAccess(lazoId, userId) {
     const result = await database_1.db.query(`SELECT id FROM lazos
@@ -49,6 +50,9 @@ async function getMessages(req, res) {
          m.media_duration_ms,
          r.content   AS reply_content,
          r.sender_id AS reply_sender_id,
+         r.type      AS reply_type,
+         r.media_url AS reply_media_url,
+         r.media_mime AS reply_media_mime,
          COALESCE(
            (SELECT json_agg(json_build_object('userId', rx.user_id, 'type', rx.type))
             FROM reactions rx
@@ -100,14 +104,20 @@ async function sendMessage(req, res) {
         const msg = result.rows[0];
         // Fetch reply content if present
         if (msg.reply_to_id) {
-            const replyResult = await database_1.db.query(`SELECT content, sender_id FROM messages WHERE id = $1`, [msg.reply_to_id]);
+            const replyResult = await database_1.db.query(`SELECT content, sender_id, type, media_url, media_mime FROM messages WHERE id = $1`, [msg.reply_to_id]);
             if (replyResult.rows.length > 0) {
                 msg.reply_content = replyResult.rows[0].content;
                 msg.reply_sender_id = replyResult.rows[0].sender_id;
+                msg.reply_type = replyResult.rows[0].type;
+                msg.reply_media_url = replyResult.rows[0].media_url;
+                msg.reply_media_mime = replyResult.rows[0].media_mime;
             }
         }
         msg.reactions = [];
         res.status(201).json({ message: msg });
+        // Realtime: avisar a los miembros del lazo (incluye al emisor; el cliente
+        // hace dedupe por id, evitando duplicados con el optimistic update).
+        (0, realtime_1.emitToLazo)(lazoId, 'message:new', msg);
         // Notificación al compañero (fire-and-forget, no bloquea la respuesta)
         (0, notificationService_1.notifyNewMessage)(lazoId, userId, content.trim()).catch(() => { });
     }
@@ -167,23 +177,37 @@ async function sendMediaMessage(req, res) {
         }
         // URL relativa que el cliente compondrá con API_BASE_URL
         const mediaUrl = `/media/${lazoId}/${file.filename}`;
+        // Dimensiones/duración opcionales (llegan como strings en multipart)
+        const toPositiveInt = (v) => {
+            const n = parseInt(String(v ?? ''), 10);
+            return Number.isFinite(n) && n > 0 ? n : null;
+        };
+        const mediaWidth = toPositiveInt(req.body?.media_width);
+        const mediaHeight = toPositiveInt(req.body?.media_height);
+        const mediaDurationMs = toPositiveInt(req.body?.media_duration_ms);
         const result = await database_1.db.query(`INSERT INTO messages
          (lazo_id, sender_id, content, type, status, reply_to_id,
-          media_url, media_mime, media_size)
-       VALUES ($1, $2, '', $3, 'sent', $4, $5, $6, $7)
+          media_url, media_mime, media_size, media_width, media_height, media_duration_ms)
+       VALUES ($1, $2, '', $3, 'sent', $4, $5, $6, $7, $8, $9, $10)
        RETURNING id, lazo_id, sender_id, content, type, status, created_at,
                  reply_to_id, media_url, media_mime, media_width, media_height,
-                 media_duration_ms`, [lazoId, userId, type, replyToId, mediaUrl, file.mimetype, file.size]);
+                 media_duration_ms`, [lazoId, userId, type, replyToId, mediaUrl, file.mimetype, file.size,
+            mediaWidth, mediaHeight, mediaDurationMs]);
         const msg = result.rows[0];
         if (msg.reply_to_id) {
-            const replyResult = await database_1.db.query(`SELECT content, sender_id FROM messages WHERE id = $1`, [msg.reply_to_id]);
+            const replyResult = await database_1.db.query(`SELECT content, sender_id, type, media_url, media_mime FROM messages WHERE id = $1`, [msg.reply_to_id]);
             if (replyResult.rows.length > 0) {
                 msg.reply_content = replyResult.rows[0].content;
                 msg.reply_sender_id = replyResult.rows[0].sender_id;
+                msg.reply_type = replyResult.rows[0].type;
+                msg.reply_media_url = replyResult.rows[0].media_url;
+                msg.reply_media_mime = replyResult.rows[0].media_mime;
             }
         }
         msg.reactions = [];
         res.status(201).json({ message: msg });
+        // Realtime: ver comentario en sendMessage
+        (0, realtime_1.emitToLazo)(lazoId, 'message:new', msg);
         const preview = type === 'photo' ? '📷 Foto' : '🎬 Video';
         (0, notificationService_1.notifyNewMessage)(lazoId, userId, preview).catch(() => { });
     }

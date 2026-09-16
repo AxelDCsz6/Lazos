@@ -27,6 +27,40 @@ async function checkPlantDeaths(): Promise<void> {
   }
 }
 
+// Inserta mensajes de sistema "No se ha regado, quedan N días" en lazos
+// activos que llevan 1-4 días sin riego mutuo (la planta muere a los 5).
+// sender_id = user1_id del lazo: es un mensaje de sistema, el render del
+// cliente no atribuye remitente.
+async function sendWateringWarnings(): Promise<void> {
+  try {
+    const result = await db.query(
+      `SELECT l.id, l.user1_id,
+              (CURRENT_DATE - COALESCE(l.last_mutual_watering_on, l.created_at::date)) AS days_without
+       FROM lazos l
+       WHERE l.is_active = TRUE
+         AND l.plant_phase != 'dead'
+         AND (CURRENT_DATE - COALESCE(l.last_mutual_watering_on, l.created_at::date))
+               BETWEEN 1 AND 4`,
+    );
+    for (const row of result.rows) {
+      const remaining = 5 - Number(row.days_without);
+      const content = remaining === 1
+        ? 'No se ha regado, queda 1 día'
+        : `No se ha regado, quedan ${remaining} días`;
+      await db.query(
+        `INSERT INTO messages (lazo_id, sender_id, content, type, status)
+         VALUES ($1, $2, $3, 'system', 'sent')`,
+        [row.id, row.user1_id, content],
+      );
+    }
+    if (result.rowCount && result.rowCount > 0) {
+      console.log(`[streakJob] ${result.rowCount} aviso(s) de riego insertados`);
+    }
+  } catch (err) {
+    console.error('[streakJob] Error en sendWateringWarnings:', err);
+  }
+}
+
 // Calcula los ms que faltan hasta las 00:00:00 en zona CDMX.
 // Usa Intl para manejar automáticamente el cambio de horario de verano.
 function msUntilNextMidnightCDMX(): number {
@@ -58,6 +92,7 @@ export function startStreakJob(): void {
     setTimeout(async () => {
       console.log('[streakJob] Ejecutando revisión de plantas...');
       await checkPlantDeaths();
+      await sendWateringWarnings();
       scheduleNext();
     }, delay);
   };

@@ -13,6 +13,9 @@ function mapMessage(m: any): Message {
     replyToId: m.reply_to_id ?? undefined,
     replyContent: m.reply_content ?? undefined,
     replySenderId: m.reply_sender_id ?? undefined,
+    replyType: m.reply_type ?? undefined,
+    replyMediaUrl: m.reply_media_url ?? undefined,
+    replyMediaMime: m.reply_media_mime ?? undefined,
     reactions: Array.isArray(m.reactions)
       ? (m.reactions as any[]).map(r => ({ userId: r.userId ?? r.user_id, type: r.type }))
       : [],

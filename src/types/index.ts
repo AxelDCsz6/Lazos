@@ -28,7 +28,7 @@ export type PlantPhase = 'seed' | 'sprout' | 'small' | 'big' | 'flower';
 
 // ─── Mensajes ─────────────────────────────────────────────────────────────────
 export type MessageStatus = 'pending' | 'sent' | 'delivered';
-export type MessageType = 'text' | 'photo' | 'video';
+export type MessageType = 'text' | 'photo' | 'video' | 'system';
 
 export interface MessageReaction {
   userId: string;
@@ -46,6 +46,10 @@ export interface Message {
   replyToId?: string;
   replyContent?: string;
   replySenderId?: string;
+  // Datos del mensaje citado (si es media, content viene vacío)
+  replyType?: MessageType;
+  replyMediaUrl?: string;
+  replyMediaMime?: string;
   reactions?: MessageReaction[];
   // Multimedia (fotos y videos). mediaUrl puede ser:
   // - URL relativa del backend (ej. /media/<lazo>/<uuid>.jpg) → componer con API base

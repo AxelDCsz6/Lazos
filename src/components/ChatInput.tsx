@@ -24,6 +24,7 @@ interface Props {
   onFocusExpand: () => void;
   onPickFromCamera?: () => void;
   onPickFromGallery?: () => void;
+  inputRef?: React.Ref<TextInput>;
 }
 
 export const ChatInput = React.memo(function ChatInput({
@@ -31,6 +32,7 @@ export const ChatInput = React.memo(function ChatInput({
   onFocusExpand,
   onPickFromCamera,
   onPickFromGallery,
+  inputRef,
 }: Props) {
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -106,6 +108,7 @@ export const ChatInput = React.memo(function ChatInput({
           <Icon name={menuOpen ? 'close' : 'plus'} size={22} color={C.textSoft} />
         </TouchableOpacity>
         <TextInput
+          ref={inputRef}
           style={styles.chatInput}
           value={inputText}
           onChangeText={setInputText}
