@@ -136,6 +136,38 @@ export async function notifyWatering(
   }
 }
 
+// ─── Notificar pérdida de racha (planta muerta) ────────────────
+// Envía push a AMBOS miembros del lazo cuando el streakJob mata
+// la planta por 5 días sin riego mutuo. `streak` es el valor ANTES
+// de reiniciarse a 0.
+export async function notifyStreakLost(
+  lazoId: string,
+  streak: number,
+): Promise<void> {
+  try {
+    const result = await db.query(
+      `SELECT u.fcm_token
+       FROM lazos l
+       JOIN users u ON (u.id = l.user1_id OR u.id = l.user2_id)
+       WHERE l.id = $1 AND u.fcm_token IS NOT NULL`,
+      [lazoId],
+    );
+    const body = streak > 1
+      ? `Perdiste la racha de ${streak} días`
+      : 'Perdiste la racha de riego';
+    for (const row of result.rows) {
+      await sendToToken(
+        row.fcm_token,
+        'Tu planta ha muerto 😢',
+        body,
+        { type: 'streak_lost', lazoId },
+      );
+    }
+  } catch (err) {
+    console.error('[notifications] notifyStreakLost error:', err);
+  }
+}
+
 // ─── Notificar creación de lazo (al invitador) ────────────────
 export async function notifyLazoCreated(
   inviterUserId: string,

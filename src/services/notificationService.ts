@@ -154,6 +154,9 @@ export function setupForegroundHandler(
       } else if (kind === 'lazo_deleted' && lazoId) {
         const deleterUsername = typeof data.deleterUsername === 'string' ? data.deleterUsername : '';
         DeviceEventEmitter.emit('lazos:deleted-by-partner', { lazoId, deleterUsername });
+      } else if (kind === 'streak_lost') {
+        // Planta muerta por 5 días sin riego: refrescar lista para ver la fase 'dead'
+        DeviceEventEmitter.emit('lazos:refresh', { reason: 'streak_lost', lazoId });
       }
 
       if (title || body) {

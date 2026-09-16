@@ -1,4 +1,5 @@
 import { db } from '../config/database';
+import { notifyStreakLost } from '../services/notificationService';
 
 const TZ = 'America/Mexico_City';
 
@@ -7,20 +8,31 @@ const TZ = 'America/Mexico_City';
 // timezone configurado en database.ts.
 async function checkPlantDeaths(): Promise<void> {
   try {
-    const result = await db.query(
-      `UPDATE lazos
-       SET plant_phase = 'dead', streak = 0, updated_at = NOW()
+    // Seleccionar primero para capturar el streak ANTES de reiniciarlo a 0
+    // (se usa en la notificación de racha perdida).
+    const select = await db.query(
+      `SELECT id, streak
+       FROM lazos
        WHERE is_active = TRUE
          AND plant_phase != 'dead'
          AND (
            (last_mutual_watering_on IS NULL     AND CURRENT_DATE - created_at::date >= 5)
            OR
            (last_mutual_watering_on IS NOT NULL AND CURRENT_DATE - last_mutual_watering_on >= 5)
-         )
-       RETURNING id`,
+         )`,
     );
-    if (result.rowCount && result.rowCount > 0) {
-      console.log(`[streakJob] ${result.rowCount} planta(s) murieron por falta de riego`);
+    if (select.rows.length === 0) { return; }
+    const ids = select.rows.map((r: { id: string }) => r.id);
+    await db.query(
+      `UPDATE lazos
+       SET plant_phase = 'dead', streak = 0, updated_at = NOW()
+       WHERE id = ANY($1::uuid[])`,
+      [ids],
+    );
+    console.log(`[streakJob] ${ids.length} planta(s) murieron por falta de riego`);
+    // Notificar racha perdida a ambos usuarios de cada lazo (fire-and-forget)
+    for (const row of select.rows) {
+      notifyStreakLost(row.id, Number(row.streak)).catch(() => {});
     }
   } catch (err) {
     console.error('[streakJob] Error en checkPlantDeaths:', err);
