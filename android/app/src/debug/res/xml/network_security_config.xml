@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Config de seguridad de red SOLO para builds de debug.
+  Permite cleartext para poder conectar con Metro (10.0.2.2 / localhost:8081).
+  No afecta al APK de release, que usa src/main/res/xml/network_security_config.xml.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
