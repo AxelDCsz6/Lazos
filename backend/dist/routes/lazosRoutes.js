@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const lazosController_1 = require("../controllers/lazosController");
 const messagesController_1 = require("../controllers/messagesController");
+const linkPreviewController_1 = require("../controllers/linkPreviewController");
 const reactionsController_1 = require("../controllers/reactionsController");
 const auth_1 = require("../middleware/auth");
 const upload_1 = require("../middleware/upload");
@@ -14,6 +15,7 @@ router.get('/:id/messages', auth_1.authMiddleware, messagesController_1.getMessa
 router.post('/:id/messages', auth_1.authMiddleware, messagesController_1.sendMessage);
 router.post('/:id/messages/media', auth_1.authMiddleware, upload_1.uploadMessageMedia, messagesController_1.sendMediaMessage);
 router.post('/:id/regar', auth_1.authMiddleware, lazosController_1.waterLazo);
+router.get('/:id/link-preview', auth_1.authMiddleware, linkPreviewController_1.getLinkPreview);
 router.delete('/:id', auth_1.authMiddleware, lazosController_1.deleteLazo);
 router.post('/:id/messages/:messageId/react', auth_1.authMiddleware, reactionsController_1.toggleReaction);
 exports.default = router;

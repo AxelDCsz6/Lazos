@@ -2,24 +2,35 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.startStreakJob = startStreakJob;
 const database_1 = require("../config/database");
+const notificationService_1 = require("../services/notificationService");
 const TZ = 'America/Mexico_City';
 // Mata plantas que llevan 5 o más días sin riego mutuo.
 // CURRENT_DATE en las queries ya opera en hora CDMX gracias al
 // timezone configurado en database.ts.
 async function checkPlantDeaths() {
     try {
-        const result = await database_1.db.query(`UPDATE lazos
-       SET plant_phase = 'dead', streak = 0, updated_at = NOW()
+        // Seleccionar primero para capturar el streak ANTES de reiniciarlo a 0
+        // (se usa en la notificación de racha perdida).
+        const select = await database_1.db.query(`SELECT id, streak
+       FROM lazos
        WHERE is_active = TRUE
          AND plant_phase != 'dead'
          AND (
            (last_mutual_watering_on IS NULL     AND CURRENT_DATE - created_at::date >= 5)
            OR
            (last_mutual_watering_on IS NOT NULL AND CURRENT_DATE - last_mutual_watering_on >= 5)
-         )
-       RETURNING id`);
-        if (result.rowCount && result.rowCount > 0) {
-            console.log(`[streakJob] ${result.rowCount} planta(s) murieron por falta de riego`);
+         )`);
+        if (select.rows.length === 0) {
+            return;
+        }
+        const ids = select.rows.map((r) => r.id);
+        await database_1.db.query(`UPDATE lazos
+       SET plant_phase = 'dead', streak = 0, updated_at = NOW()
+       WHERE id = ANY($1::uuid[])`, [ids]);
+        console.log(`[streakJob] ${ids.length} planta(s) murieron por falta de riego`);
+        // Notificar racha perdida a ambos usuarios de cada lazo (fire-and-forget)
+        for (const row of select.rows) {
+            (0, notificationService_1.notifyStreakLost)(row.id, Number(row.streak)).catch(() => { });
         }
     }
     catch (err) {

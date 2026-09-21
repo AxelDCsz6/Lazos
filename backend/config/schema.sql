@@ -78,7 +78,18 @@ CREATE TABLE invite_codes (
   creator_id UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   used       BOOLEAN     NOT NULL DEFAULT FALSE,
   expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '15 minutes'),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ─── PREVIEWS DE LINKS (cache OpenGraph) ──────────────────────
+CREATE TABLE link_previews (
+  url          TEXT PRIMARY KEY,
+  title        TEXT,
+  description  TEXT,
+  image_url    TEXT,
+  site_name    TEXT,
+  resolved_url TEXT,
+  fetched_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ─── ÍNDICES ─────────────────────────────────────────────────

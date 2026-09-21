@@ -26,6 +26,8 @@ import { useAuth } from '../../hooks/useAuth';
 import { LazosModal } from '../../components/LazosModal';
 import { AnimatedPlant } from '../../components/AnimatedPlant';
 import { ChatInput } from '../../components/ChatInput';
+import { MessageText } from '../../components/MessageText';
+import { LinkPreviewCard } from '../../components/LinkPreviewCard';
 import { fetchLazos, waterLazo as waterLazoApi, deleteLazoRemote } from '../../services/lazosService';
 import {
   getPendingDeletes,
@@ -57,6 +59,7 @@ import {
 import ImageViewing from 'react-native-image-viewing';
 import Video from 'react-native-video';
 import { formatChatDateSeparator, isSameCalendarDay } from '../../utils/dateFormat';
+import { extractFirstUrl } from '../../utils/links';
 
 const { width: SW, height: SH } = Dimensions.get('window');
 
@@ -1101,9 +1104,25 @@ function ChatModal({
                             </TouchableOpacity>
                           )}
                           {item.type === 'text' && (
-                            <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}>
-                              {item.content}
-                            </Text>
+                            <>
+                              <MessageText
+                                text={item.content}
+                                style={[styles.bubbleText, mine && styles.bubbleTextMine]}
+                                linkStyle={mine ? styles.linkTextMine : styles.linkText}
+                              />
+                              {(() => {
+                                const firstUrl = extractFirstUrl(item.content);
+                                if (!firstUrl || !lazo) { return null; }
+                                return (
+                                  <LinkPreviewCard
+                                    lazoId={lazo.id}
+                                    url={firstUrl}
+                                    mine={mine}
+                                    width={Math.min(SW * 0.75 - 24, 240)}
+                                  />
+                                );
+                              })()}
+                            </>
                           )}
                           <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>
                             {formatTime(item.createdAt)}
@@ -2249,6 +2268,8 @@ const styles = StyleSheet.create({
   bubbleOther: { alignSelf: 'flex-start' },
   bubbleText: { fontSize: 15, color: C.text, lineHeight: 20 },
   bubbleTextMine: { color: '#FFF' },
+  linkText: { color: '#1B74E4', textDecorationLine: 'underline' },
+  linkTextMine: { color: '#D8E8FF', textDecorationLine: 'underline' },
   bubbleTime: { fontSize: 11, color: C.textLight, marginTop: 4 },
   bubbleTimeMine: { color: 'rgba(255,255,255,0.7)' },
   bubbleMedia: { padding: 4, overflow: 'hidden' },

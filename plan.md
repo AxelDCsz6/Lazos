@@ -1,6 +1,6 @@
 #10		Hacer que cuando se responda a una foto si se vea			x
 #9		Agregar fecha de los mensajes			x
-#8		Arreglar notificaciones			-
+#8		Arreglar notificaciones			- (código C1 completo: notifyStreakLost + streakJob + Dockerfile + handler streak_lost. BLOQUEADO en falta de `android/app/google-services.json` — el usuario debe descargarlo de Firebase Console y colocarlo; luego deploy backend + E2E)
 #7		Burbuja con numero de notificaciones			x
 #6		Mensajes de riego en el chat			x
 #5		Hacer que al momento de hacer slide sobre un mensaje automaticamente el teclado se despliegue			x
@@ -9,7 +9,8 @@
 #2		Arreglar login para que los campos no aparezcan en oscuro			x
 #1		Arreglar riego para que no se quede atascado			x 
 
-> **Estado de migraciones (FASE B):** `backend/config/migrations/002_system_messages.sql` PENDIENTE de aplicar en producción (permite `type='system'` en messages). Sin ella, los mensajes de riego (B3) fallarán con error de CHECK constraint. `schema.sql` ya actualizado. B1 y B2 no requieren migraciones.
+> **Estado de migraciones:** `002_system_messages.sql` PENDIENTE de aplicar en producción. `003_link_previews.sql` (C2) PENDIENTE de aplicar en producción. `schema.sql` ya actualizado con ambas.
+> **FASE C (estado):** C2 (#11) y C3 (#12) implementadas: hyperlinks + preview cards (`src/components/MessageText.tsx`, `LinkPreviewCard.tsx`, `InlineVideoPlayer.tsx`, `src/utils/links.ts`), endpoint `GET /api/lazos/:id/link-preview` con cache anti-SSRF. Deps nuevas: `react-native-webview` (frontend), `node-html-parser` (backend). Requiere: rebuild de la app (native), migración 003 en producción, deploy backend. C1 (#8) ver nota en la lista.
 
 estas seran las tareas para ti en el proyecto de hoy, primero que nada estudia la base de codigo, te dire un poquito lo que quiero en cada parte del proyecto:
 1.- Cuando yo riego la planta sino quito el pulgar antes de que se termine de regar se queda atascada, tengo un marge de 1 segundo en el que si se termino de regar y lo quito se puede regresar pero en la mayoria de los casos simplemente se queda atascada hasta que yo salga y vuelva a entrar, necesito una manera de forzar a que vuelva a su lugar despues del riego.

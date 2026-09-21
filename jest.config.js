@@ -9,5 +9,6 @@ module.exports = {
     '^react-native-image-picker$': '<rootDir>/__mocks__/react-native-image-picker.js',
     '^react-native-image-viewing$': '<rootDir>/__mocks__/react-native-image-viewing.js',
     '^react-native-video$': '<rootDir>/__mocks__/react-native-video.js',
+    '^react-native-webview$': '<rootDir>/__mocks__/react-native-webview.js',
   },
 };
